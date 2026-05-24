@@ -99,11 +99,10 @@ export const defaultModelsOfProvider = {
 		'grok-3-mini-fast'
 	],
 	gemini: [ // https://ai.google.dev/gemini-api/docs/models/gemini
-		'gemini-2.5-pro-exp-03-25',
-		'gemini-2.5-flash-preview-04-17',
+		'gemini-2.5-pro',
+		'gemini-2.5-flash',
 		'gemini-2.0-flash',
 		'gemini-2.0-flash-lite',
-		'gemini-2.5-pro-preview-05-06',
 	],
 	deepseek: [ // https://api-docs.deepseek.com/quick_start/pricing
 		'deepseek-chat',
@@ -414,7 +413,7 @@ const extensiveModelOptionsFallback: VoidStaticProviderInfo['modelOptionsFallbac
 		};
 	}
 
-	if (lower.includes('gemini') && (lower.includes('2.5') || lower.includes('2-5'))) return toFallback(geminiModelOptions, 'gemini-2.5-pro-exp-03-25')
+	if (lower.includes('gemini') && (lower.includes('2.5') || lower.includes('2-5'))) return toFallback(geminiModelOptions, lower.includes('flash') ? 'gemini-2.5-flash' : 'gemini-2.5-pro')
 
 	if (lower.includes('claude-3-5') || lower.includes('claude-3.5')) return toFallback(anthropicModelOptions, 'claude-3-5-sonnet-20241022')
 	if (lower.includes('claude')) return toFallback(anthropicModelOptions, 'claude-3-7-sonnet-20250219')
@@ -807,10 +806,26 @@ const xAISettings: VoidStaticProviderInfo = {
 // ---------------- GEMINI ----------------
 const geminiModelOptions = { // https://ai.google.dev/gemini-api/docs/pricing
 	// https://ai.google.dev/gemini-api/docs/thinking#set-budget
-	'gemini-2.5-pro-preview-05-06': {
+	'gemini-2.5-pro': {
 		contextWindow: 1_048_576,
 		reservedOutputTokenSpace: 8_192,
 		cost: { input: 0, output: 0 },
+		downloadable: false,
+		supportsFIM: false,
+		supportsSystemMessage: 'separated',
+		specialToolFormat: 'gemini-style',
+		reasoningCapabilities: {
+			supportsReasoning: true,
+			canTurnOffReasoning: true,
+			canIOReasoning: false,
+			reasoningSlider: { type: 'budget_slider', min: 1024, max: 8192, default: 1024 }, // max is really 24576
+			reasoningReservedOutputTokenSpace: 8192,
+		},
+	},
+	'gemini-2.5-flash': {
+		contextWindow: 1_048_576,
+		reservedOutputTokenSpace: 8_192,
+		cost: { input: 0.15, output: .60 }, // TODO $3.50 output with thinking not included
 		downloadable: false,
 		supportsFIM: false,
 		supportsSystemMessage: 'separated',
@@ -833,52 +848,10 @@ const geminiModelOptions = { // https://ai.google.dev/gemini-api/docs/pricing
 		specialToolFormat: 'gemini-style',
 		reasoningCapabilities: false, // no reasoning
 	},
-	'gemini-2.5-flash-preview-04-17': {
-		contextWindow: 1_048_576,
-		reservedOutputTokenSpace: 8_192,
-		cost: { input: 0.15, output: .60 }, // TODO $3.50 output with thinking not included
-		downloadable: false,
-		supportsFIM: false,
-		supportsSystemMessage: 'separated',
-		specialToolFormat: 'gemini-style',
-		reasoningCapabilities: {
-			supportsReasoning: true,
-			canTurnOffReasoning: true,
-			canIOReasoning: false,
-			reasoningSlider: { type: 'budget_slider', min: 1024, max: 8192, default: 1024 }, // max is really 24576
-			reasoningReservedOutputTokenSpace: 8192,
-		},
-	},
-	'gemini-2.5-pro-exp-03-25': {
-		contextWindow: 1_048_576,
-		reservedOutputTokenSpace: 8_192,
-		cost: { input: 0, output: 0 },
-		downloadable: false,
-		supportsFIM: false,
-		supportsSystemMessage: 'separated',
-		specialToolFormat: 'gemini-style',
-		reasoningCapabilities: {
-			supportsReasoning: true,
-			canTurnOffReasoning: true,
-			canIOReasoning: false,
-			reasoningSlider: { type: 'budget_slider', min: 1024, max: 8192, default: 1024 }, // max is really 24576
-			reasoningReservedOutputTokenSpace: 8192,
-		},
-	},
 	'gemini-2.0-flash': {
 		contextWindow: 1_048_576,
 		reservedOutputTokenSpace: 8_192, // 8_192,
 		cost: { input: 0.10, output: 0.40 },
-		downloadable: false,
-		supportsFIM: false,
-		supportsSystemMessage: 'separated',
-		specialToolFormat: 'gemini-style',
-		reasoningCapabilities: false,
-	},
-	'gemini-2.0-flash-lite-preview-02-05': {
-		contextWindow: 1_048_576,
-		reservedOutputTokenSpace: 8_192, // 8_192,
-		cost: { input: 0.075, output: 0.30 },
 		downloadable: false,
 		supportsFIM: false,
 		supportsSystemMessage: 'separated',
@@ -917,9 +890,22 @@ const geminiModelOptions = { // https://ai.google.dev/gemini-api/docs/pricing
 	},
 } as const satisfies { [s: string]: VoidStaticModelInfo }
 
+const geminiDeprecatedModelAliases: Record<string, keyof typeof geminiModelOptions> = {
+	'gemini-2.5-flash-preview-04-17': 'gemini-2.5-flash',
+	'gemini-2.5-pro-exp-03-25': 'gemini-2.5-pro',
+	'gemini-2.5-pro-preview-05-06': 'gemini-2.5-pro',
+	'gemini-2.0-flash-lite-preview-02-05': 'gemini-2.0-flash-lite',
+}
+
 const geminiSettings: VoidStaticProviderInfo = {
 	modelOptions: geminiModelOptions,
-	modelOptionsFallback: (modelName) => { return null },
+	modelOptionsFallback: (modelName) => {
+		const aliasTarget = geminiDeprecatedModelAliases[modelName]
+		if (aliasTarget) {
+			return { modelName: aliasTarget, recognizedModelName: aliasTarget, ...geminiModelOptions[aliasTarget] }
+		}
+		return null
+	},
 }
 
 
