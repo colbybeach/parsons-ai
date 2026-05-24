@@ -88,7 +88,7 @@ These dependencies are installed within the Docker container (Ubuntu 20.04 base)
 
     *   `create_appimage.sh`
     *   `void.desktop`
-    *   `void.png`
+    *   `parsons.png`
 
 4.  **Run the Script:**
 
@@ -111,7 +111,7 @@ These dependencies are installed within the Docker container (Ubuntu 20.04 base)
 *   **AppImage Creation:**
     *   Creates the `VoidApp.AppDir` structure.
     *   Copies binaries, resources, and the `.desktop` entry.
-    *   Copies `void.desktop` and `void.png`.
+    *   Copies `void.desktop` and `parsons.png`.
     *   Strips unnecessary symbols from the binary.
     *   Runs `appimagetool` to generate the AppImage.
 *   **Cleanup:** Removes the temporary `Dockerfile.build`.

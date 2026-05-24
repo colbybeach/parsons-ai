@@ -104,13 +104,13 @@ cd /app && \
 rm -rf VoidApp.AppDir && \
 mkdir -p VoidApp.AppDir/usr/bin VoidApp.AppDir/usr/lib VoidApp.AppDir/usr/share/applications && \
 find . -maxdepth 1 ! -name VoidApp.AppDir ! -name "." ! -name ".." -exec cp -r {} VoidApp.AppDir/usr/bin/ \; && \
-cp void.png VoidApp.AppDir/ && \
+cp parsons.png VoidApp.AppDir/ && \
 echo "[Desktop Entry]" > VoidApp.AppDir/void.desktop && \
 echo "Name=Void" >> VoidApp.AppDir/void.desktop && \
 echo "Comment=Open source AI code editor." >> VoidApp.AppDir/void.desktop && \
 echo "GenericName=Text Editor" >> VoidApp.AppDir/void.desktop && \
 echo "Exec=void %F" >> VoidApp.AppDir/void.desktop && \
-echo "Icon=void" >> VoidApp.AppDir/void.desktop && \
+echo "Icon=parsons" >> VoidApp.AppDir/void.desktop && \
 echo "Type=Application" >> VoidApp.AppDir/void.desktop && \
 echo "StartupNotify=false" >> VoidApp.AppDir/void.desktop && \
 echo "StartupWMClass=Void" >> VoidApp.AppDir/void.desktop && \
@@ -130,7 +130,7 @@ echo "Name[ru]=Новое пустое окно" >> VoidApp.AppDir/void.desktop 
 echo "Name[zh_CN]=新建空窗口" >> VoidApp.AppDir/void.desktop && \
 echo "Name[zh_TW]=開新空視窗" >> VoidApp.AppDir/void.desktop && \
 echo "Exec=void --new-window %F" >> VoidApp.AppDir/void.desktop && \
-echo "Icon=void" >> VoidApp.AppDir/void.desktop && \
+echo "Icon=parsons" >> VoidApp.AppDir/void.desktop && \
 chmod +x VoidApp.AppDir/void.desktop && \
 cp VoidApp.AppDir/void.desktop VoidApp.AppDir/usr/share/applications/ && \
 echo "[Desktop Entry]" > VoidApp.AppDir/void-url-handler.desktop && \
@@ -138,7 +138,7 @@ echo "Name=Void - URL Handler" > VoidApp.AppDir/void-url-handler.desktop && \
 echo "Comment=Open source AI code editor." > VoidApp.AppDir/void-url-handler.desktop && \
 echo "GenericName=Text Editor" > VoidApp.AppDir/void-url-handler.desktop && \
 echo "Exec=void --open-url %U" > VoidApp.AppDir/void-url-handler.desktop && \
-echo "Icon=void" > VoidApp.AppDir/void-url-handler.desktop && \
+echo "Icon=parsons" > VoidApp.AppDir/void-url-handler.desktop && \
 echo "Type=Application" > VoidApp.AppDir/void-url-handler.desktop && \
 echo "NoDisplay=true" > VoidApp.AppDir/void-url-handler.desktop && \
 echo "StartupNotify=true" > VoidApp.AppDir/void-url-handler.desktop && \

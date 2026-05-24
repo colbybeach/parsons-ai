@@ -1637,6 +1637,144 @@ const ToolRequestAcceptRejectButtons = ({ toolName }: { toolName: ToolName }) =>
 	</div>
 }
 
+const ToolRequestConfirmationModal = ({ toolMessage, assistantMessage, assistantMessageIdx, threadId }: {
+	toolMessage: ToolMessage<ToolName> & { type: 'tool_request' },
+	assistantMessage: ChatMessage & { role: 'assistant' } | null,
+	assistantMessageIdx: number | null,
+	threadId: string
+}) => {
+	const accessor = useAccessor()
+	const chatThreadsService = accessor.get('IChatThreadService')
+	const metricsService = accessor.get('IMetricsService')
+	const [learningAnswer, setLearningAnswer] = useState('')
+	const [validationFeedback, setValidationFeedback] = useState<string | null>(null)
+	const [isValidating, setIsValidating] = useState(false)
+
+	const canApprove = learningAnswer.trim().length >= 20
+
+	useEffect(() => {
+		setLearningAnswer('')
+		setValidationFeedback(null)
+		setIsValidating(false)
+	}, [toolMessage.id])
+
+	useEffect(() => {
+		const onKeyDown = (event: globalThis.KeyboardEvent) => {
+			if (event.key === 'Escape') {
+				chatThreadsService.rejectLatestToolRequest(threadId)
+				metricsService.capture('Tool Request Rejected', { source: 'modal_escape' })
+			}
+		}
+		window.addEventListener('keydown', onKeyDown)
+		return () => window.removeEventListener('keydown', onKeyDown)
+	}, [chatThreadsService, metricsService, threadId])
+
+	const onAccept = useCallback(async () => {
+		if (!canApprove || isValidating) return
+		setIsValidating(true)
+		setValidationFeedback(null)
+		const result = await chatThreadsService.validateLearningAnswerForLatestToolRequest({ threadId, learningAnswer })
+		setIsValidating(false)
+		if (result.correct) {
+			chatThreadsService.approveLatestToolRequest(threadId)
+			metricsService.capture('Tool Request Accepted', { source: 'modal_after_learning_validation' })
+		}
+		else {
+			setValidationFeedback(result.feedback)
+			metricsService.capture('Tool Request Learning Validation Failed', { source: 'modal' })
+		}
+	}, [canApprove, chatThreadsService, isValidating, learningAnswer, metricsService, threadId])
+
+	const onReject = useCallback(() => {
+		chatThreadsService.rejectLatestToolRequest(threadId)
+		metricsService.capture('Tool Request Rejected', { source: 'modal' })
+	}, [chatThreadsService, metricsService, threadId])
+
+	const title = getTitle(toolMessage)
+	const isBuiltInTool = isABuiltinToolName(toolMessage.name)
+	const { desc1, desc1Info } = isBuiltInTool
+		? toolNameToDesc(toolMessage.name, toolMessage.params as BuiltinToolCallParams[BuiltinToolName], accessor)
+		: { desc1: removeMCPToolNamePrefix(toolMessage.name), desc1Info: toolMessage.mcpServerName }
+
+	return <div
+		className='fixed inset-0 z-[1000] flex items-center justify-center bg-black/45 px-4'
+		onMouseDown={onReject}
+	>
+		<div
+			role='dialog'
+			aria-modal='true'
+			aria-labelledby='void-tool-request-confirmation-title'
+			className='w-full max-w-[420px] rounded-md border border-void-border-2 bg-void-bg-1 text-void-fg-1 shadow-2xl'
+			onMouseDown={(event) => event.stopPropagation()}
+		>
+			<div className='border-b border-void-border-2 px-4 py-3'>
+				<div id='void-tool-request-confirmation-title' className='text-base font-semibold'>
+					Confirm before implementing
+				</div>
+				<div className='mt-1 text-sm text-void-fg-3'>
+					Review the AI result before approving the implementation.
+				</div>
+			</div>
+			<div className='max-h-[70vh] overflow-auto px-4 py-4'>
+				{assistantMessage?.displayContent ? <div className='mb-4 rounded border border-void-border-2 bg-void-bg-2 px-3 py-2'>
+					<ProseWrapper>
+						<ChatMarkdownRender
+							string={assistantMessage.displayContent}
+							chatMessageLocation={assistantMessageIdx === null ? undefined : { threadId, messageIdx: assistantMessageIdx }}
+							isApplyEnabled={false}
+							isLinkDetectionEnabled={true}
+						/>
+					</ProseWrapper>
+				</div> : null}
+				<div className='text-sm font-medium'>{title}</div>
+				<div className='mt-2 text-sm text-void-fg-2'>{desc1}</div>
+				{desc1Info ? <div className='mt-1 break-all text-xs text-void-fg-3'>{desc1Info}</div> : null}
+				<div className='mt-4'>
+					<label className='block text-sm font-medium text-void-fg-1' htmlFor='void-tool-request-learning-answer'>
+						Explain what this change will do in your own words.
+					</label>
+					<textarea
+						id='void-tool-request-learning-answer'
+						value={learningAnswer}
+						onChange={(event) => {
+							setLearningAnswer(event.target.value)
+							setValidationFeedback(null)
+						}}
+						className='mt-2 min-h-[88px] w-full resize-y rounded border border-void-border-2 bg-void-bg-3 px-2 py-2 text-sm text-void-fg-1 outline-none focus:border-[var(--vscode-focusBorder)]'
+						placeholder='For example: This will add a confirmation step before edits are applied...'
+						disabled={isValidating}
+						autoFocus
+					/>
+					{validationFeedback ? <div className='mt-2 rounded border border-[var(--vscode-inputValidation-warningBorder)] bg-[var(--vscode-inputValidation-warningBackground)] px-2 py-1.5 text-xs text-[var(--vscode-inputValidation-warningForeground)]'>
+						{validationFeedback}
+					</div> : null}
+					<div className='mt-1 text-xs text-void-fg-3'>
+						{isValidating ? 'Checking your understanding...' : canApprove ? 'Ready to check understanding.' : 'Write at least 20 characters to approve the implementation.'}
+					</div>
+				</div>
+			</div>
+			<div className='flex justify-end gap-2 border-t border-void-border-2 px-4 py-3'>
+				<button
+					onClick={onReject}
+					className='rounded bg-[var(--vscode-button-secondaryBackground)] px-3 py-1.5 text-sm font-medium text-[var(--vscode-button-secondaryForeground)] hover:bg-[var(--vscode-button-secondaryHoverBackground)]'
+				>
+					Cancel
+				</button>
+				<button
+					onClick={onAccept}
+					disabled={!canApprove || isValidating}
+					className={`rounded px-3 py-1.5 text-sm font-medium ${canApprove && !isValidating
+						? 'bg-[var(--vscode-button-background)] text-[var(--vscode-button-foreground)] hover:bg-[var(--vscode-button-hoverBackground)]'
+						: 'cursor-not-allowed bg-[var(--vscode-button-secondaryBackground)] text-[var(--vscode-disabledForeground)]'
+						}`}
+				>
+					{isValidating ? 'Checking...' : 'Approve'}
+				</button>
+			</div>
+		</div>
+	</div>
+}
+
 export const ToolChildrenWrapper = ({ children, className }: { children: React.ReactNode, className?: string }) => {
 	return <div className={`${className ? className : ''} cursor-default select-none`}>
 		<div className='px-2 min-w-full overflow-hidden'>
@@ -2907,6 +3045,23 @@ export const SidebarChat = () => {
 	// this is just if it's currently being generated, NOT if it's currently running
 	const toolIsGenerating = toolCallSoFar && !toolCallSoFar.isDone // show loading for slow tools (right now just edit)
 
+	const pendingToolRequest = useMemo(() => {
+		if (isRunning !== 'awaiting_user') return null
+		for (let i = previousMessages.length - 1; i >= 0; i -= 1) {
+			const message = previousMessages[i]
+			if (message.role === 'tool' && message.type === 'tool_request') {
+				for (let j = i - 1; j >= 0; j -= 1) {
+					const assistantMessage = previousMessages[j]
+					if (assistantMessage.role === 'assistant') {
+						return { toolMessage: message, assistantMessage, assistantMessageIdx: j }
+					}
+				}
+				return { toolMessage: message, assistantMessage: null, assistantMessageIdx: null }
+			}
+		}
+		return null
+	}, [isRunning, previousMessages])
+
 	// ----- SIDEBAR CHAT state (local) -----
 
 	// state of current message
@@ -3181,6 +3336,12 @@ export const SidebarChat = () => {
 			{isLandingPage ?
 				landingPageContent
 				: threadPageContent}
+			{pendingToolRequest ? <ToolRequestConfirmationModal
+				toolMessage={pendingToolRequest.toolMessage}
+				assistantMessage={pendingToolRequest.assistantMessage}
+				assistantMessageIdx={pendingToolRequest.assistantMessageIdx}
+				threadId={threadId}
+			/> : null}
 		</Fragment>
 	)
 }

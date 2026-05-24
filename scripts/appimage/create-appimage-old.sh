@@ -16,8 +16,8 @@ if [ ! -f "./void" ]; then
 fi
 
 # Check if icon exists
-if [ ! -f "./void.png" ]; then
-    echo "Error: void.png icon not found in current directory"
+if [ ! -f "./parsons.png" ]; then
+    echo "Error: parsons.png icon not found in current directory"
     exit 1
 fi
 
@@ -38,8 +38,8 @@ echo "Copying files excluding create-appimage.sh and appimagetool-x86_64.AppImag
 cp -v ./void "$APP_DIR/usr/bin/"
 
 # Copy the icon to required locations
-cp -v ./void.png "$APP_DIR/void.png"
-cp -v ./void.png "$APP_DIR/usr/share/icons/hicolor/256x256/apps/void.png"
+cp -v ./parsons.png "$APP_DIR/parsons.png"
+cp -v ./parsons.png "$APP_DIR/usr/share/icons/hicolor/256x256/apps/parsons.png"
 
 # Copy dependencies with error checking
 echo "Copying dependencies..."
@@ -57,7 +57,7 @@ if ! cat > "$APP_DIR/$APP_NAME.desktop" <<EOF
 [Desktop Entry]
 Name=$APP_NAME
 Exec=void
-Icon=void
+Icon=parsons
 Type=Application
 Categories=Utility;
 Comment=Void Linux Application

@@ -19,6 +19,12 @@ function code() {
 	if [[ "$OSTYPE" == "darwin"* ]]; then
 		NAME=`node -p "require('./product.json').nameLong"`
 		CODE="./.build/electron/$NAME.app/Contents/MacOS/Electron"
+		if [[ ! -x "$CODE" ]]; then
+			APP_BUNDLE=$(find ./.build/electron -maxdepth 1 -name "*.app" -type d | head -n 1)
+			if [[ -n "$APP_BUNDLE" ]]; then
+				CODE="$APP_BUNDLE/Contents/MacOS/Electron"
+			fi
+		fi
 	else
 		NAME=`node -p "require('./product.json').applicationName"`
 		CODE=".build/electron/$NAME"

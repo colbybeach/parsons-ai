@@ -147,6 +147,10 @@ type ChatThreads = {
 	[id: string]: undefined | ThreadType;
 }
 
+export type LearningAnswerValidationResult =
+	| { correct: true; feedback: string }
+	| { correct: false; feedback: string }
+
 
 export type ThreadsState = {
 	allThreads: ChatThreads;
@@ -285,6 +289,7 @@ export interface IChatThreadService {
 	// approve/reject
 	approveLatestToolRequest(threadId: string): void;
 	rejectLatestToolRequest(threadId: string): void;
+	validateLearningAnswerForLatestToolRequest(opts: { threadId: string, learningAnswer: string }): Promise<LearningAnswerValidationResult>;
 
 	// jump to history
 	jumpToCheckpointBeforeMessageIdx(opts: { threadId: string, messageIdx: number, jumpToUserModified: boolean }): void;
@@ -531,6 +536,116 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			, threadId
 		)
 	}
+
+	private _extractLearningValidationJSON(fullText: string): LearningAnswerValidationResult {
+		const trimmed = fullText.trim()
+		const withoutFence = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+		const jsonMatch = withoutFence.match(/\{[\s\S]*\}/)
+		const jsonStr = jsonMatch ? jsonMatch[0] : withoutFence
+
+		try {
+			const parsed = JSON.parse(jsonStr) as { correct?: unknown; feedback?: unknown }
+			return {
+				correct: parsed.correct === true,
+				feedback: typeof parsed.feedback === 'string' && parsed.feedback.trim()
+					? parsed.feedback.trim()
+					: parsed.correct === true
+						? 'Looks good.'
+						: 'Try explaining the purpose and mechanism of the change more concretely.'
+			}
+		}
+		catch {
+			return {
+				correct: false,
+				feedback: 'I could not verify that yet. Try explaining the purpose and mechanism of the change more concretely.'
+			}
+		}
+	}
+
+	validateLearningAnswerForLatestToolRequest({ threadId, learningAnswer }: { threadId: string, learningAnswer: string }): Promise<LearningAnswerValidationResult> {
+		const thread = this.state.allThreads[threadId]
+		if (!thread) {
+			return Promise.resolve({ correct: false, feedback: 'This chat thread is no longer available.' })
+		}
+
+		const toolMessageIdx = findLastIdx(thread.messages, message => message.role === 'tool' && message.type === 'tool_request')
+		const toolMessage = toolMessageIdx === -1 ? undefined : thread.messages[toolMessageIdx]
+		if (!(toolMessage?.role === 'tool' && toolMessage.type === 'tool_request')) {
+			return Promise.resolve({ correct: false, feedback: 'There is no pending implementation to approve.' })
+		}
+
+		const assistantMessage = findLast(thread.messages.slice(0, toolMessageIdx), message => message.role === 'assistant')
+		const aiResult = assistantMessage?.role === 'assistant' ? assistantMessage.displayContent : ''
+		const toolDetails = JSON.stringify({
+			name: toolMessage.name,
+			rawParams: toolMessage.rawParams,
+			mcpServerName: toolMessage.mcpServerName,
+		}, null, 2)
+
+		const systemMessage = [
+			'You are checking whether a learner understands a proposed code change before it is implemented.',
+			'Be generous about wording and terminology.',
+			'Mark correct if the learner captures the main purpose and rough mechanism of the change.',
+			'Mark incorrect if the learner is unrelated, pure filler, or clearly misunderstands the change.',
+			'Return only JSON in this exact shape: {"correct": boolean, "feedback": string}.',
+			'The feedback should be one concise sentence.'
+		].join('\n')
+
+		const validationPrompt = [
+			'AI result:',
+			aiResult || '(No assistant explanation was available.)',
+			'',
+			'Proposed implementation tool:',
+			toolDetails,
+			'',
+			'Learner explanation:',
+			learningAnswer,
+		].join('\n')
+
+		const simpleMessages = [{
+			role: 'user' as const,
+			content: validationPrompt
+		}]
+
+		return new Promise((resolve) => {
+			const { modelSelection, modelSelectionOptions } = this._currentModelSelectionProps()
+			const { messages, separateSystemMessage } = this._convertToLLMMessagesService.prepareLLMSimpleMessages({
+				simpleMessages,
+				systemMessage,
+				modelSelection,
+				featureName: 'Chat',
+			})
+			const requestId = this._llmMessageService.sendLLMMessage({
+				messagesType: 'chatMessages',
+				messages,
+				separateSystemMessage,
+				chatMode: null,
+				modelSelection,
+				modelSelectionOptions,
+				overridesOfModel: this._settingsService.state.overridesOfModel,
+				onText: () => { },
+				onFinalMessage: ({ fullText }) => {
+					resolve(this._extractLearningValidationJSON(fullText))
+				},
+				onError: (error) => {
+					console.error('Error validating learning answer:', error)
+					resolve({
+						correct: false,
+						feedback: 'I could not verify that yet. Try explaining the purpose and mechanism of the change more concretely.'
+					})
+				},
+				onAbort: () => {
+					resolve({ correct: false, feedback: 'The validation was cancelled. Try again.' })
+				},
+				logging: { loggingName: 'Chat - Validate Learning Answer', loggingExtras: { threadId, toolName: toolMessage.name } },
+			})
+
+			if (!requestId) {
+				resolve({ correct: false, feedback: 'I could not start validation. Check that a chat model is configured.' })
+			}
+		})
+	}
+
 	rejectLatestToolRequest(threadId: string) {
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return // should never happen
@@ -644,9 +759,10 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			const approvalType = isBuiltInTool ? approvalTypeOfBuiltinToolName[toolName] : 'MCP tools'
 			if (approvalType) {
 				const autoApprove = this._settingsService.state.globalSettings.autoApprove[approvalType]
+				const requiresManualImplementationApproval = approvalType === 'edits'
 				// add a tool_request because we use it for UI if a tool is loading (this should be improved in the future)
 				this._addMessageToThread(threadId, { role: 'tool', type: 'tool_request', content: '(Awaiting user permission...)', result: null, name: toolName, params: toolParams, id: toolId, rawParams: opts.unvalidatedToolParams, mcpServerName })
-				if (!autoApprove) {
+				if (!autoApprove || requiresManualImplementationApproval) {
 					return { awaitingUserApproval: true }
 				}
 			}
