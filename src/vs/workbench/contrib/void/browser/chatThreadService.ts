@@ -151,6 +151,11 @@ export type LearningAnswerValidationResult =
 	| { correct: true; feedback: string }
 	| { correct: false; feedback: string }
 
+export type LearningChallenge = {
+	question: string;
+	expectedAnswer: string;
+}
+
 
 export type ThreadsState = {
 	allThreads: ChatThreads;
@@ -289,6 +294,7 @@ export interface IChatThreadService {
 	// approve/reject
 	approveLatestToolRequest(threadId: string): void;
 	rejectLatestToolRequest(threadId: string): void;
+	generateLearningChallengeForLatestToolRequest(opts: { threadId: string }): Promise<LearningChallenge>;
 	validateLearningAnswerForLatestToolRequest(opts: { threadId: string, learningAnswer: string }): Promise<LearningAnswerValidationResult>;
 
 	// jump to history
@@ -311,6 +317,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 	readonly streamState: ThreadStreamState = {}
 	state: ThreadsState // allThreads is persisted, currentThread is not
+	private readonly _learningChallengeByToolId: { [toolId: string]: LearningChallenge | undefined } = {}
 
 	// used in checkpointing
 	// private readonly _userModifiedFilesToCheckInCheckpoints = new LRUCache<string, null>(50)
@@ -530,6 +537,18 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		if (!(lastMsg.role === 'tool' && lastMsg.type === 'tool_request')) return // should never happen
 
 		const callThisToolFirst: ToolMessage<ToolName> = lastMsg
+		this._updateLatestTool(threadId, {
+			role: 'tool',
+			type: 'running_now',
+			name: lastMsg.name,
+			params: lastMsg.params,
+			content: '(value not received yet...)',
+			result: null,
+			id: lastMsg.id,
+			rawParams: lastMsg.rawParams,
+			mcpServerName: lastMsg.mcpServerName,
+		})
+		this._setStreamState(threadId, { isRunning: 'idle', interrupt: 'not_needed' })
 
 		this._wrapRunAgentToNotify(
 			this._runChatAgent({ callThisToolFirst, threadId, ...this._currentModelSelectionProps() })
@@ -562,16 +581,132 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		}
 	}
 
+	private _extractLearningChallengeJSON(fullText: string): LearningChallenge {
+		const trimmed = fullText.trim()
+		const withoutFence = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+		const jsonMatch = withoutFence.match(/\{[\s\S]*\}/)
+		const jsonStr = jsonMatch ? jsonMatch[0] : withoutFence
+		try {
+			const parsed = JSON.parse(jsonStr) as { question?: unknown; expectedAnswer?: unknown }
+			const question = typeof parsed.question === 'string' && parsed.question.trim()
+				? parsed.question.trim()
+				: 'Explain the main purpose of this change and where it is applied.'
+			const expectedAnswer = typeof parsed.expectedAnswer === 'string' && parsed.expectedAnswer.trim()
+				? parsed.expectedAnswer.trim()
+				: 'The change applies the requested implementation in the target file and enforces the intended behavior.'
+			return { question, expectedAnswer }
+		}
+		catch {
+			return {
+				question: 'Explain the main purpose of this change and where it is applied.',
+				expectedAnswer: 'The change applies the requested implementation in the target file and enforces the intended behavior.'
+			}
+		}
+	}
+
+	private _getLatestPendingToolRequest(threadId: string): { toolMessage: ToolMessage<ToolName> & { type: 'tool_request' }, toolMessageIdx: number } | null {
+		const thread = this.state.allThreads[threadId]
+		if (!thread) return null
+		const toolMessageIdx = findLastIdx(thread.messages, message => message.role === 'tool' && message.type === 'tool_request')
+		const toolMessage = toolMessageIdx === -1 ? undefined : thread.messages[toolMessageIdx]
+		if (!(toolMessage?.role === 'tool' && toolMessage.type === 'tool_request')) return null
+		return { toolMessage, toolMessageIdx }
+	}
+
+	generateLearningChallengeForLatestToolRequest({ threadId }: { threadId: string }): Promise<LearningChallenge> {
+		const pending = this._getLatestPendingToolRequest(threadId)
+		if (!pending) {
+			return Promise.resolve({
+				question: 'Explain the main purpose of this change and where it is applied.',
+				expectedAnswer: 'The change applies the requested implementation in the target file and enforces the intended behavior.'
+			})
+		}
+		const { toolMessage, toolMessageIdx } = pending
+		const cached = this._learningChallengeByToolId[toolMessage.id]
+		if (cached) return Promise.resolve(cached)
+
+		const thread = this.state.allThreads[threadId]
+		if (!thread) return Promise.resolve({
+			question: 'Explain the main purpose of this change and where it is applied.',
+			expectedAnswer: 'The change applies the requested implementation in the target file and enforces the intended behavior.'
+		})
+		const assistantMessage = findLast(thread.messages.slice(0, toolMessageIdx), message => message.role === 'assistant')
+		const aiResult = assistantMessage?.role === 'assistant' ? assistantMessage.displayContent : ''
+		const toolDetails = JSON.stringify({
+			name: toolMessage.name,
+			rawParams: toolMessage.rawParams,
+			mcpServerName: toolMessage.mcpServerName,
+		}, null, 2)
+
+		const systemMessage = [
+			'You are generating a learning check for a student before a code edit is applied.',
+			'Return only JSON in this exact shape: {"question": string, "expectedAnswer": string}.',
+			'question: one concise, specific question about the exact proposed change.',
+			'expectedAnswer: short rubric answer (1-3 sentences) that would count as correct.',
+			'Write the question in natural language for the student.',
+			'Do not mention tool calls, function-call machinery, AI behavior, raw params, or internal implementation metadata.',
+			'Prefer asking about the behavior, purpose, data flow, or visible code change itself.'
+		].join('\n')
+
+		const prompt = [
+			'AI result:',
+			aiResult || '(No assistant explanation was available.)',
+			'',
+			'Implementation details for context only:',
+			toolDetails,
+			'',
+			'Generate a single natural-sounding question and expected answer for this exact change.',
+			'The student should not see or be asked about tool-call terminology.'
+		].join('\n')
+
+		const simpleMessages = [{ role: 'user' as const, content: prompt }]
+		return new Promise((resolve) => {
+			const { modelSelection, modelSelectionOptions } = this._currentModelSelectionProps()
+			const { messages, separateSystemMessage } = this._convertToLLMMessagesService.prepareLLMSimpleMessages({
+				simpleMessages,
+				systemMessage,
+				modelSelection,
+				featureName: 'Chat',
+			})
+			const requestId = this._llmMessageService.sendLLMMessage({
+				messagesType: 'chatMessages',
+				messages,
+				separateSystemMessage,
+				chatMode: null,
+				modelSelection,
+				modelSelectionOptions,
+				overridesOfModel: this._settingsService.state.overridesOfModel,
+				onText: () => { },
+				onFinalMessage: ({ fullText }) => {
+					const challenge = this._extractLearningChallengeJSON(fullText)
+					this._learningChallengeByToolId[toolMessage.id] = challenge
+					resolve(challenge)
+				},
+				onError: () => {
+					const fallback = this._extractLearningChallengeJSON('')
+					this._learningChallengeByToolId[toolMessage.id] = fallback
+					resolve(fallback)
+				},
+				onAbort: () => {
+					const fallback = this._extractLearningChallengeJSON('')
+					this._learningChallengeByToolId[toolMessage.id] = fallback
+					resolve(fallback)
+				},
+				logging: { loggingName: 'Chat - Generate Learning Challenge', loggingExtras: { threadId, toolName: toolMessage.name } },
+			})
+			if (!requestId) resolve(this._extractLearningChallengeJSON(''))
+		})
+	}
+
 	validateLearningAnswerForLatestToolRequest({ threadId, learningAnswer }: { threadId: string, learningAnswer: string }): Promise<LearningAnswerValidationResult> {
+		const pending = this._getLatestPendingToolRequest(threadId)
+		if (!pending) {
+			return Promise.resolve({ correct: false, feedback: 'There is no pending implementation to approve.' })
+		}
+		const { toolMessage, toolMessageIdx } = pending
 		const thread = this.state.allThreads[threadId]
 		if (!thread) {
 			return Promise.resolve({ correct: false, feedback: 'This chat thread is no longer available.' })
-		}
-
-		const toolMessageIdx = findLastIdx(thread.messages, message => message.role === 'tool' && message.type === 'tool_request')
-		const toolMessage = toolMessageIdx === -1 ? undefined : thread.messages[toolMessageIdx]
-		if (!(toolMessage?.role === 'tool' && toolMessage.type === 'tool_request')) {
-			return Promise.resolve({ correct: false, feedback: 'There is no pending implementation to approve.' })
 		}
 
 		const assistantMessage = findLast(thread.messages.slice(0, toolMessageIdx), message => message.role === 'assistant')
@@ -582,13 +717,18 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			mcpServerName: toolMessage.mcpServerName,
 		}, null, 2)
 
+		const challenge = this._learningChallengeByToolId[toolMessage.id] ?? this._extractLearningChallengeJSON('')
+
 		const systemMessage = [
 			'You are checking whether a learner understands a proposed code change before it is implemented.',
 			'Be generous about wording and terminology.',
-			'Mark correct if the learner captures the main purpose and rough mechanism of the change.',
+			'Use the expected answer rubric to judge correctness.',
 			'Mark incorrect if the learner is unrelated, pure filler, or clearly misunderstands the change.',
 			'Return only JSON in this exact shape: {"correct": boolean, "feedback": string}.',
-			'The feedback should be one concise sentence.'
+			'The feedback should be one concise sentence.',
+			'If the learner is incorrect, give a hint rather than the answer.',
+			'Do not reveal the expected answer, exact replacement text, exact code, or the full explanation needed to pass.',
+			'Hints should gently point the learner toward the behavior, purpose, or affected area of the change.'
 		].join('\n')
 
 		const validationPrompt = [
@@ -597,6 +737,12 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			'',
 			'Proposed implementation tool:',
 			toolDetails,
+			'',
+			'Generated learning question:',
+			challenge.question,
+			'',
+			'Expected answer rubric:',
+			challenge.expectedAnswer,
 			'',
 			'Learner explanation:',
 			learningAnswer,
