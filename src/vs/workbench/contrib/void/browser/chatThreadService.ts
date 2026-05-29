@@ -14,7 +14,7 @@ import { ILLMMessageService } from '../common/sendLLMMessageService.js';
 import { chat_userMessageContent, isABuiltinToolName } from '../common/prompt/prompts.js';
 import { AnthropicReasoning, getErrorMessage, RawToolCallObj, RawToolParamsObj } from '../common/sendLLMMessageTypes.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
-import { FeatureName, ModelSelection, ModelSelectionOptions } from '../common/voidSettingsTypes.js';
+import { ChatMode, FeatureName, ModelSelection, ModelSelectionOptions } from '../common/voidSettingsTypes.js';
 import { IVoidSettingsService } from '../common/voidSettingsService.js';
 import { approvalTypeOfBuiltinToolName, BuiltinToolCallParams, ToolCallParams, ToolName, ToolResult } from '../common/toolsServiceTypes.js';
 import { IToolsService } from './toolsService.js';
@@ -44,6 +44,105 @@ import { RawMCPToolCall } from '../common/mcpServiceTypes.js';
 // related to retrying when LLM message has error
 const CHAT_RETRIES = 3
 const RETRY_DELAY = 2500
+
+type EducationResponseStyle = 'concept_explain' | 'guided_design' | 'pseudocode_only' | 'refuse_exact_solution'
+
+export const extractEducationResponseStyleJSON = (fullText: string): EducationResponseStyle => {
+	const trimmed = fullText.trim()
+	const withoutFence = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+	const jsonMatch = withoutFence.match(/\{[\s\S]*\}/)
+	const jsonStr = jsonMatch ? jsonMatch[0] : withoutFence
+	try {
+		const parsed = JSON.parse(jsonStr) as { style?: unknown }
+		if (parsed.style === 'concept_explain') return 'concept_explain'
+		if (parsed.style === 'guided_design') return 'guided_design'
+		if (parsed.style === 'pseudocode_only') return 'pseudocode_only'
+		if (parsed.style === 'refuse_exact_solution') return 'refuse_exact_solution'
+		return 'guided_design'
+	}
+	catch {
+		if (withoutFence.includes('concept_explain')) return 'concept_explain'
+		if (withoutFence.includes('pseudocode_only')) return 'pseudocode_only'
+		if (withoutFence.includes('refuse_exact_solution')) return 'refuse_exact_solution'
+		return 'guided_design'
+	}
+}
+
+export const educationGuardrailSystemMessage = (style: EducationResponseStyle): string => {
+	if (style === 'concept_explain') {
+		return [
+			'Education response mode: concept explain.',
+			'Give a direct, helpful conceptual answer with examples when appropriate.',
+			'You may include small illustrative examples, including code, as long as they are general-purpose, brief, and not tailored to the user\'s exact codebase.',
+			'Do not provide a full copy-paste-ready implementation.'
+		].join('\n')
+	}
+	if (style === 'guided_design') {
+		return [
+			'Education response mode: guided design.',
+			'Explain the approach, moving parts, and tradeoffs without giving a copy-paste-ready implementation.',
+			'Do not provide fenced code blocks, imports, full function bodies, or exact project-specific code.',
+			'Use bullets, short explanations, and implementation steps instead of runnable code.',
+			'Small inline identifiers or tiny snippets are acceptable only if they are generic and not enough to paste directly into a project.'
+		].join('\n')
+	}
+	if (style === 'pseudocode_only') {
+		return [
+			'Education response mode: pseudocode only.',
+			'Do not provide runnable code, fenced code blocks, imports, exact JSX, exact CSS, exact TypeScript, or project-specific implementation.',
+			'You may provide high-level pseudocode or placeholder structure only.',
+			'Any pseudo block must stay abstract and not be copy-paste-ready.'
+		].join('\n')
+	}
+	return [
+		'Education response mode: refuse exact solution.',
+		'The user appears to be asking for a direct implementation they could copy into their project.',
+		'Do not provide copy-paste-ready code, exact patches, exact replacement text, or precise line-by-line implementation.',
+		'Instead, briefly explain the concept, give a hint, and offer a checklist of what to think through next.',
+		'Do not use fenced code blocks.'
+	].join('\n')
+}
+
+export const sanitizeEducationalResponse = (style: EducationResponseStyle, fullText: string): string => {
+	if (style === 'concept_explain') return fullText
+
+	const strippedCodeBlocks = fullText.replace(/```[\s\S]*?```/g, style === 'guided_design'
+		? 'Code example omitted so you can work through the implementation yourself.'
+		: 'Pseudocode omitted to keep this from turning into a copy-paste solution.')
+
+	const strippedIntegrationDirections = strippedCodeBlocks
+		.replace(/create a new file at[^\n]*/gi, 'Think about where a component like this would live in your project structure.')
+		.replace(/paste (in|this|something like this)[^\n]*/gi, 'Try sketching the structure yourself before writing the code.')
+		.replace(/replace that component entirely[^\n]*/gi, 'Decide whether you want to adapt the existing component or create a new one.')
+		.replace(/drop anywhere in your [^\n]*/gi, 'Use the concept in the place that makes the most sense in your UI.')
+
+	if (style === 'guided_design') return strippedIntegrationDirections
+
+	if (style === 'pseudocode_only') {
+		return strippedIntegrationDirections
+			.replace(/^\s*(import|export|const|let|var|function|class)\b.*$/gm, '')
+			.trim()
+	}
+
+	return strippedIntegrationDirections
+		.replace(/^\s*(import|export|const|let|var|function|class)\b.*$/gm, '')
+		.trim()
+}
+
+const likelyNeedsEducationalRewrite = (style: EducationResponseStyle, fullText: string): boolean => {
+	if (style === 'concept_explain') return false
+	const lowered = fullText.toLowerCase()
+	if (lowered.includes('here’s a complete') || lowered.includes("here's a complete")) return true
+	if (lowered.includes('self-contained')) return true
+	if (lowered.includes('create (or update)')) return true
+	if (lowered.includes('import and use it')) return true
+	if (lowered.includes('drop into your')) return true
+	if (/```[\s\S]*?```/.test(fullText)) return true
+	if (/create a new file at/i.test(fullText)) return true
+	if (/paste (in|this|something like this)/i.test(fullText)) return true
+	if (style === 'pseudocode_only' && /(tsx|jsx|css|typescript|react app|tailwind app)/i.test(fullText)) return true
+	return false
+}
 
 
 const findStagingSelectionIndex = (currentSelections: StagingSelectionItem[] | undefined, newSelection: StagingSelectionItem): number | null => {
@@ -292,10 +391,10 @@ export interface IChatThreadService {
 	addUserMessageAndStreamResponse({ userMessage, threadId }: { userMessage: string, threadId: string }): Promise<void>;
 
 	// approve/reject
-	approveLatestToolRequest(threadId: string): void;
-	rejectLatestToolRequest(threadId: string): void;
-	generateLearningChallengeForLatestToolRequest(opts: { threadId: string }): Promise<LearningChallenge>;
-	validateLearningAnswerForLatestToolRequest(opts: { threadId: string, learningAnswer: string }): Promise<LearningAnswerValidationResult>;
+	approveLatestToolRequest(threadId: string, toolId?: string): void;
+	rejectLatestToolRequest(threadId: string, toolId?: string): void;
+	generateLearningChallengeForLatestToolRequest(opts: { threadId: string, toolId?: string }): Promise<LearningChallenge>;
+	validateLearningAnswerForLatestToolRequest(opts: { threadId: string, toolId?: string, learningAnswer: string }): Promise<LearningAnswerValidationResult>;
 
 	// jump to history
 	jumpToCheckpointBeforeMessageIdx(opts: { threadId: string, messageIdx: number, jumpToUserModified: boolean }): void;
@@ -529,14 +628,24 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		this._addMessageToThread(threadId, tool)
 	}
 
-	approveLatestToolRequest(threadId: string) {
+	private _getPendingToolRequestById(threadId: string, toolId: string): { toolMessage: ToolMessage<ToolName> & { type: 'tool_request' }, toolMessageIdx: number } | null {
+		const thread = this.state.allThreads[threadId]
+		if (!thread) return null
+		const toolMessageIdx = findLastIdx(thread.messages, message => message.role === 'tool' && message.type === 'tool_request' && message.id === toolId)
+		const toolMessage = toolMessageIdx === -1 ? undefined : thread.messages[toolMessageIdx]
+		if (!(toolMessage?.role === 'tool' && toolMessage.type === 'tool_request')) return null
+		return { toolMessage, toolMessageIdx }
+	}
+
+	approveLatestToolRequest(threadId: string, toolId?: string) {
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return // should never happen
 
-		const lastMsg = thread.messages[thread.messages.length - 1]
-		if (!(lastMsg.role === 'tool' && lastMsg.type === 'tool_request')) return // should never happen
+		const pending = toolId ? this._getPendingToolRequestById(threadId, toolId) : this._getLatestPendingToolRequest(threadId)
+		if (!pending) return // should never happen
+		const { toolMessage: lastMsg } = pending
 
-		const callThisToolFirst: ToolMessage<ToolName> = lastMsg
+		const callThisToolFirst: ToolMessage<ToolName> & { type: 'tool_request' } = lastMsg
 		this._updateLatestTool(threadId, {
 			role: 'tool',
 			type: 'running_now',
@@ -604,6 +713,155 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		}
 	}
 
+	private _classifyEducationResponseStyle({ threadId, chatMode, modelSelection }: { threadId: string, chatMode: ChatMode, modelSelection: ModelSelection | null }): Promise<EducationResponseStyle | null> {
+		if (modelSelection === null) return Promise.resolve(null)
+		const thread = this.state.allThreads[threadId]
+		if (!thread) return Promise.resolve(null)
+		const latestUserMessage = findLast(thread.messages, (message) => message.role === 'user') as UserMessageType | undefined
+		if (!latestUserMessage) return Promise.resolve(null)
+
+		const systemMessage = [
+			'Classify the learner request for an educational coding assistant.',
+			'Return only JSON in this exact shape: {"style": "concept_explain" | "guided_design" | "pseudocode_only" | "refuse_exact_solution"}.',
+			'Use "concept_explain" for concepts, syntax, definitions, comparisons, and short general examples.',
+			'Use "guided_design" when the user wants to build something and should get structure, steps, and tradeoffs but not runnable code.',
+			'Use "pseudocode_only" when the request would otherwise invite a nearly copy-pasteable generic implementation, even if it is not tied to a specific codebase.',
+			'Use "refuse_exact_solution" when the user is asking for exact implementation details, exact code to write in their project, or a direct solution they could paste in.',
+			'If the request is ambiguous but asks how to implement or build something, prefer "guided_design" or "pseudocode_only" rather than "concept_explain".',
+			'If there is codebase context, selections, or prior thread context suggesting the user wants a direct solution, prefer "refuse_exact_solution".',
+			'In agent mode, classify the user-visible explanation the assistant should give. Tool execution approval is handled separately, so focus only on how much solution detail should appear in the visible chat response.',
+			'In agent mode, if the user is asking the assistant to build, implement, add, or wire something up, prefer "pseudocode_only" or "refuse_exact_solution" unless the request is clearly conceptual.'
+		].join('\n')
+
+		const priorContext = thread.messages
+			.filter(message => message.role === 'user' || message.role === 'assistant')
+			.slice(-6, -1)
+			.map(message => {
+				if (message.role === 'assistant') return `assistant: ${truncate(message.displayContent || message.reasoning || '', 800)}`
+				return `user: ${truncate(message.content || message.displayContent || '', 800)}`
+			})
+			.join('\n\n')
+
+		const prompt = [
+			'Chat mode:',
+			chatMode,
+			'',
+			'Recent conversation context:',
+			priorContext || '(No earlier context.)',
+			'',
+			'Latest user-visible request:',
+			latestUserMessage.displayContent || '(empty)',
+			'',
+			'Latest user request with attached context summary:',
+			latestUserMessage.content || latestUserMessage.displayContent || '(empty)',
+			'',
+			'Number of attached selections:',
+			String(latestUserMessage.selections?.length ?? 0),
+		].join('\n')
+
+		const simpleMessages = [{ role: 'user' as const, content: prompt }]
+		return new Promise((resolve) => {
+			const { messages, separateSystemMessage } = this._convertToLLMMessagesService.prepareLLMSimpleMessages({
+				simpleMessages,
+				systemMessage,
+				modelSelection,
+				featureName: 'Chat',
+			})
+			const { modelSelectionOptions } = this._currentModelSelectionProps()
+			const requestId = this._llmMessageService.sendLLMMessage({
+				messagesType: 'chatMessages',
+				messages,
+				separateSystemMessage,
+				chatMode: null,
+				modelSelection,
+				modelSelectionOptions,
+				overridesOfModel: this._settingsService.state.overridesOfModel,
+				onText: () => { },
+				onFinalMessage: ({ fullText }) => {
+					const style = extractEducationResponseStyleJSON(fullText)
+					console.log('Education response style classified', {
+						threadId,
+						chatMode,
+						style,
+						classifierRawResponse: fullText,
+					})
+					resolve(style)
+				},
+				onError: () => resolve('pseudocode_only'),
+				onAbort: () => resolve('pseudocode_only'),
+				logging: { loggingName: 'Chat - Classify Education Response Style', loggingExtras: { threadId, chatMode } },
+			})
+			if (!requestId) resolve('pseudocode_only')
+		})
+	}
+
+	private _rewriteEducationalAgentResponse({
+		threadId,
+		modelSelection,
+		style,
+		originalResponse,
+	}: {
+		threadId: string,
+		modelSelection: ModelSelection | null,
+		style: EducationResponseStyle,
+		originalResponse: string,
+	}): Promise<string> {
+		if (modelSelection === null) return Promise.resolve(sanitizeEducationalResponse(style, originalResponse))
+		const thread = this.state.allThreads[threadId]
+		const latestUserMessage = thread ? findLast(thread.messages, (message) => message.role === 'user') as UserMessageType | undefined : undefined
+
+		const systemMessage = [
+			'Rewrite the assistant response for an educational coding product.',
+			'Your goal is to preserve usefulness while removing copy-paste-ready implementation guidance.',
+			'Do not provide file paths, fenced code blocks, imports, exact JSX, exact CSS, exact TypeScript, exact prop signatures, or step-by-step integration instructions.',
+			'Do not say that content was omitted or removed.',
+			'Do not mention internal tools, tool calls, sanitization, policies, or that you are rewriting anything.',
+			'Return only the rewritten assistant response as plain text.',
+			style === 'guided_design'
+				? 'Use this structure: short overview, 3-5 bullet points about moving parts or decisions, then 1 short paragraph about what to think through next.'
+				: style === 'pseudocode_only'
+					? 'Use this structure: 1 short conceptual paragraph, then 3-5 abstract bullet points, then at most 3 lines of clearly non-runnable pseudocode if it genuinely helps.'
+					: 'Use this structure: brief concept explanation, one hint, and a short checklist of what the learner should inspect or decide next.'
+		].join('\n')
+
+		const prompt = [
+			'Latest user request:',
+			latestUserMessage?.content || latestUserMessage?.displayContent || '(empty)',
+			'',
+			'Current educational mode:',
+			style,
+			'',
+			'Assistant draft to rewrite:',
+			originalResponse,
+		].join('\n')
+
+		const simpleMessages = [{ role: 'user' as const, content: prompt }]
+		return new Promise((resolve) => {
+			const { messages, separateSystemMessage } = this._convertToLLMMessagesService.prepareLLMSimpleMessages({
+				simpleMessages,
+				systemMessage,
+				modelSelection,
+				featureName: 'Chat',
+			})
+			const { modelSelectionOptions } = this._currentModelSelectionProps()
+			const requestId = this._llmMessageService.sendLLMMessage({
+				messagesType: 'chatMessages',
+				messages,
+				separateSystemMessage,
+				chatMode: null,
+				modelSelection,
+				modelSelectionOptions,
+				overridesOfModel: this._settingsService.state.overridesOfModel,
+				onText: () => { },
+				onFinalMessage: ({ fullText }) => resolve(fullText.trim() || sanitizeEducationalResponse(style, originalResponse)),
+				onError: () => resolve(sanitizeEducationalResponse(style, originalResponse)),
+				onAbort: () => resolve(sanitizeEducationalResponse(style, originalResponse)),
+				logging: { loggingName: 'Chat - Rewrite Educational Agent Response', loggingExtras: { threadId, style } },
+			})
+			if (!requestId) resolve(sanitizeEducationalResponse(style, originalResponse))
+		})
+	}
+
 	private _getLatestPendingToolRequest(threadId: string): { toolMessage: ToolMessage<ToolName> & { type: 'tool_request' }, toolMessageIdx: number } | null {
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return null
@@ -613,8 +871,8 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		return { toolMessage, toolMessageIdx }
 	}
 
-	generateLearningChallengeForLatestToolRequest({ threadId }: { threadId: string }): Promise<LearningChallenge> {
-		const pending = this._getLatestPendingToolRequest(threadId)
+	generateLearningChallengeForLatestToolRequest({ threadId, toolId }: { threadId: string, toolId?: string }): Promise<LearningChallenge> {
+		const pending = toolId ? this._getPendingToolRequestById(threadId, toolId) : this._getLatestPendingToolRequest(threadId)
 		if (!pending) {
 			return Promise.resolve({
 				question: 'Explain the main purpose of this change and where it is applied.',
@@ -698,8 +956,8 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		})
 	}
 
-	validateLearningAnswerForLatestToolRequest({ threadId, learningAnswer }: { threadId: string, learningAnswer: string }): Promise<LearningAnswerValidationResult> {
-		const pending = this._getLatestPendingToolRequest(threadId)
+	validateLearningAnswerForLatestToolRequest({ threadId, toolId, learningAnswer }: { threadId: string, toolId?: string, learningAnswer: string }): Promise<LearningAnswerValidationResult> {
+		const pending = toolId ? this._getPendingToolRequestById(threadId, toolId) : this._getLatestPendingToolRequest(threadId)
 		if (!pending) {
 			return Promise.resolve({ correct: false, feedback: 'There is no pending implementation to approve.' })
 		}
@@ -792,11 +1050,12 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		})
 	}
 
-	rejectLatestToolRequest(threadId: string) {
+	rejectLatestToolRequest(threadId: string, toolId?: string) {
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return // should never happen
 
-		const lastMsg = thread.messages[thread.messages.length - 1]
+		const pending = toolId ? this._getPendingToolRequestById(threadId, toolId) : this._getLatestPendingToolRequest(threadId)
+		const lastMsg = pending?.toolMessage ?? thread.messages[thread.messages.length - 1]
 
 		let params: ToolCallParams<ToolName>
 		if (lastMsg.role === 'tool' && lastMsg.type !== 'invalid_params') {
@@ -1012,6 +1271,11 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		// above just defines helpers, below starts the actual function
 		const { chatMode } = this._settingsService.state.globalSettings // should not change as we loop even if user changes it, so it goes here
 		const { overridesOfModel } = this._settingsService.state
+		const educationResponseStyle = await this._classifyEducationResponseStyle({ threadId, chatMode, modelSelection })
+		const extraSystemMessage = chatMode !== 'agent' && educationResponseStyle
+			? educationGuardrailSystemMessage(educationResponseStyle)
+			: undefined
+		const shouldHideStreamingAgentText = chatMode === 'agent' && !!educationResponseStyle
 
 		let nMessagesSent = 0
 		let shouldSendAnotherMessage = true
@@ -1042,7 +1306,8 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			const { messages, separateSystemMessage } = await this._convertToLLMMessagesService.prepareLLMChatMessages({
 				chatMessages,
 				modelSelection,
-				chatMode
+				chatMode,
+				extraSystemMessage,
 			})
 
 			if (interruptedWhenIdle) {
@@ -1074,10 +1339,29 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 					logging: { loggingName: `Chat - ${chatMode}`, loggingExtras: { threadId, nMessagesSent, chatMode } },
 					separateSystemMessage: separateSystemMessage,
 					onText: ({ fullText, fullReasoning, toolCall }) => {
-						this._setStreamState(threadId, { isRunning: 'LLM', llmInfo: { displayContentSoFar: fullText, reasoningSoFar: fullReasoning, toolCallSoFar: toolCall ?? null }, interrupt: Promise.resolve(() => { if (llmCancelToken) this._llmMessageService.abort(llmCancelToken) }) })
+						this._setStreamState(threadId, {
+							isRunning: 'LLM',
+							llmInfo: {
+								displayContentSoFar: shouldHideStreamingAgentText ? '' : fullText,
+								reasoningSoFar: fullReasoning,
+								toolCallSoFar: toolCall ?? null
+							},
+							interrupt: Promise.resolve(() => { if (llmCancelToken) this._llmMessageService.abort(llmCancelToken) })
+						})
 					},
 					onFinalMessage: async ({ fullText, fullReasoning, toolCall, anthropicReasoning, }) => {
-						resMessageIsDonePromise({ type: 'llmDone', toolCall, info: { fullText, fullReasoning, anthropicReasoning } }) // resolve with tool calls
+						let finalText = fullText
+						if (educationResponseStyle) {
+							if (chatMode === 'agent' && !toolCall) {
+								finalText = likelyNeedsEducationalRewrite(educationResponseStyle, fullText)
+									? await this._rewriteEducationalAgentResponse({ threadId, modelSelection, style: educationResponseStyle, originalResponse: fullText })
+									: sanitizeEducationalResponse(educationResponseStyle, fullText)
+							}
+							else if (chatMode !== 'agent') {
+								finalText = sanitizeEducationalResponse(educationResponseStyle, fullText)
+							}
+						}
+						resMessageIsDonePromise({ type: 'llmDone', toolCall, info: { fullText: finalText, fullReasoning, anthropicReasoning } }) // resolve with tool calls
 					},
 					onError: async (error) => {
 						resMessageIsDonePromise({ type: 'llmError', error: error })

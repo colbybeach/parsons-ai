@@ -21,6 +21,11 @@ import { IMCPService } from '../common/mcpService.js';
 
 export const EMPTY_MESSAGE = '(empty message)'
 
+export const combineChatSystemMessage = (baseSystemMessage: string, extraSystemMessage: string | undefined, disableSystemMessage: boolean): string => {
+	if (disableSystemMessage) return extraSystemMessage?.trim() ?? ''
+	return [baseSystemMessage, extraSystemMessage?.trim()].filter(Boolean).join('\n\n')
+}
+
 
 
 type SimpleLLMMessage = {
@@ -522,7 +527,7 @@ const prepareMessages = (params: {
 export interface IConvertToLLMMessageService {
 	readonly _serviceBrand: undefined;
 	prepareLLMSimpleMessages: (opts: { simpleMessages: SimpleLLMMessage[], systemMessage: string, modelSelection: ModelSelection | null, featureName: FeatureName }) => { messages: LLMChatMessage[], separateSystemMessage: string | undefined }
-	prepareLLMChatMessages: (opts: { chatMessages: ChatMessage[], chatMode: ChatMode, modelSelection: ModelSelection | null }) => Promise<{ messages: LLMChatMessage[], separateSystemMessage: string | undefined }>
+	prepareLLMChatMessages: (opts: { chatMessages: ChatMessage[], chatMode: ChatMode, modelSelection: ModelSelection | null, extraSystemMessage?: string }) => Promise<{ messages: LLMChatMessage[], separateSystemMessage: string | undefined }>
 	prepareFIMMessage(opts: { messages: LLMFIMMessage, }): { prefix: string, suffix: string, stopTokens: string[] }
 }
 
@@ -667,7 +672,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		})
 		return { messages, separateSystemMessage };
 	}
-	prepareLLMChatMessages: IConvertToLLMMessageService['prepareLLMChatMessages'] = async ({ chatMessages, chatMode, modelSelection }) => {
+	prepareLLMChatMessages: IConvertToLLMMessageService['prepareLLMChatMessages'] = async ({ chatMessages, chatMode, modelSelection, extraSystemMessage }) => {
 		if (modelSelection === null) return { messages: [], separateSystemMessage: undefined }
 
 		const { overridesOfModel } = this.voidSettingsService.state
@@ -681,7 +686,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 
 		const { disableSystemMessage } = this.voidSettingsService.state.globalSettings;
 		const fullSystemMessage = await this._generateChatMessagesSystemMessage(chatMode, specialToolFormat)
-		const systemMessage = disableSystemMessage ? '' : fullSystemMessage;
+		const systemMessage = combineChatSystemMessage(fullSystemMessage, extraSystemMessage, disableSystemMessage)
 
 		const modelSelectionOptions = this.voidSettingsService.state.optionsOfModelSelection['Chat'][modelSelection.providerName]?.[modelSelection.modelName]
 
@@ -763,6 +768,3 @@ gemini response:
 	}
 }
 */
-
-
-

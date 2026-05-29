@@ -1586,7 +1586,7 @@ const LearningQuestionModal = ({ toolMessage, assistantMessage, assistantMessage
 	const [isGeneratingQuestion, setIsGeneratingQuestion] = useState(true)
 	const [learningQuestion, setLearningQuestion] = useState<string | null>(null)
 
-	const canApprove = learningAnswer.trim().length >= 20
+	const canApprove = learningAnswer.trim().length >= 10
 
 	useEffect(() => {
 		setLearningAnswer('')
@@ -1599,7 +1599,7 @@ const LearningQuestionModal = ({ toolMessage, assistantMessage, assistantMessage
 	useEffect(() => {
 		let isMounted = true
 		setIsGeneratingQuestion(true)
-		chatThreadsService.generateLearningChallengeForLatestToolRequest({ threadId }).then((challenge) => {
+		chatThreadsService.generateLearningChallengeForLatestToolRequest({ threadId, toolId: toolMessage.id }).then((challenge) => {
 			if (!isMounted) return
 			setLearningQuestion(challenge.question)
 			setIsGeneratingQuestion(false)
@@ -1614,23 +1614,23 @@ const LearningQuestionModal = ({ toolMessage, assistantMessage, assistantMessage
 	useEffect(() => {
 		const onKeyDown = (event: globalThis.KeyboardEvent) => {
 			if (event.key === 'Escape') {
-				chatThreadsService.rejectLatestToolRequest(threadId)
+				chatThreadsService.rejectLatestToolRequest(threadId, toolMessage.id)
 				metricsService.capture('Tool Request Rejected', { source: 'modal_escape' })
 			}
 		}
 		window.addEventListener('keydown', onKeyDown)
 		return () => window.removeEventListener('keydown', onKeyDown)
-	}, [chatThreadsService, metricsService, threadId])
+	}, [chatThreadsService, metricsService, threadId, toolMessage.id])
 
 	const onAccept = useCallback(async () => {
 		if (!canApprove || isValidating) return
 		setIsValidating(true)
 		setValidationFeedback(null)
-		const result = await chatThreadsService.validateLearningAnswerForLatestToolRequest({ threadId, learningAnswer })
+		const result = await chatThreadsService.validateLearningAnswerForLatestToolRequest({ threadId, toolId: toolMessage.id, learningAnswer })
 		setIsValidating(false)
 		if (result.correct) {
 			onCloseForToolId(toolMessage.id)
-			chatThreadsService.approveLatestToolRequest(threadId)
+			chatThreadsService.approveLatestToolRequest(threadId, toolMessage.id)
 			metricsService.capture('Tool Request Accepted', { source: 'modal_after_learning_validation' })
 		}
 		else {
@@ -1641,7 +1641,7 @@ const LearningQuestionModal = ({ toolMessage, assistantMessage, assistantMessage
 
 	const onReject = useCallback(() => {
 		onCloseForToolId(toolMessage.id)
-		chatThreadsService.rejectLatestToolRequest(threadId)
+		chatThreadsService.rejectLatestToolRequest(threadId, toolMessage.id)
 		metricsService.capture('Tool Request Rejected', { source: 'modal' })
 	}, [chatThreadsService, metricsService, onCloseForToolId, threadId, toolMessage.id])
 
@@ -3028,10 +3028,19 @@ export const SidebarChat = () => {
 		setClosedToolRequestIds(prev => new Set(prev).add(toolId))
 	}, [])
 	useEffect(() => {
-		if (isRunning !== 'awaiting_user') {
-			setClosedToolRequestIds(new Set())
-		}
-	}, [isRunning])
+		const pendingToolIds = new Set(
+			previousMessages
+				.filter(message => message.role === 'tool' && message.type === 'tool_request')
+				.map(message => message.id)
+		)
+		setClosedToolRequestIds(prev => {
+			const next = new Set<string>()
+			for (const toolId of prev) {
+				if (pendingToolIds.has(toolId)) next.add(toolId)
+			}
+			return next
+		})
+	}, [previousMessages])
 
 	// ----- SIDEBAR CHAT state (local) -----
 
