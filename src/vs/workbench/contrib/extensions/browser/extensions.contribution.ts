@@ -655,7 +655,7 @@ class ExtensionsContributions extends Disposable implements IWorkbenchContributi
 				title: localize({ key: 'miPreferencesExtensions', comment: ['&& denotes a mnemonic'] }, "&&Extensions")
 			},
 			group: '2_configuration',
-			order: 3
+			order: 4
 		}));
 		this._register(MenuRegistry.appendMenuItem(MenuId.GlobalActivity, {
 			command: {
@@ -663,7 +663,7 @@ class ExtensionsContributions extends Disposable implements IWorkbenchContributi
 				title: localize('showExtensions', "Extensions")
 			},
 			group: '2_configuration',
-			order: 3
+			order: 4
 		}));
 
 		this.registerExtensionAction({

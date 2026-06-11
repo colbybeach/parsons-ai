@@ -10,7 +10,8 @@ import '../styles.css'
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { ScrollType } from '../../../../../../../editor/common/editorCommon.js';
 import { acceptAllBg, acceptBorder, buttonFontSize, buttonTextColor, rejectAllBg, rejectBg, rejectBorder } from '../../../../common/helpers/colors.js';
-import { ParsonsCommandBarProps } from '../../../parsonsCommandBarService.js';
+import { ParsonsCommandBarProps } from '../../../parsonsCommandBarServiceInterface.js';
+import { IParsonsCommandBarService } from '../../../parsonsCommandBarServiceInterface.js';
 import { Check, EllipsisVertical, Menu, MoveDown, MoveLeft, MoveRight, MoveUp, X } from 'lucide-react';
 import {
 	VOID_GOTO_NEXT_DIFF_ACTION_ID,
@@ -89,7 +90,7 @@ export const ParsonsCommandBar = ({ uri, editor }: ParsonsCommandBarProps) => {
 	const editorService = accessor.get('ICodeEditorService')
 	const metricsService = accessor.get('IMetricsService')
 	const commandService = accessor.get('ICommandService')
-	const commandBarService = accessor.get('IParsonsCommandBarService')
+	const commandBarService = accessor.get(IParsonsCommandBarService)
 	const parsonsModelService = accessor.get('IVoidModelService')
 	const keybindingService = accessor.get('IKeybindingService')
 	const { stateOfURI: commandBarState, sortedURIs: sortedCommandBarURIs } = useCommandBarState()

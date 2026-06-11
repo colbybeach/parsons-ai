@@ -6,6 +6,7 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { useAccessor, useChatThreadsState, useChatThreadsStreamState, useCommandBarState, useCommandBarURIListener, useSettingsState } from '../util/services.js'
 import { usePromise, useRefState } from '../util/helpers.js'
+import { IParsonsCommandBarService } from '../../../parsonsCommandBarServiceInterface.js'
 import { isFeatureNameDisabled } from '../../../../common/parsonsSettingsTypes.js'
 import { URI } from '../../../../../../../base/common/uri.js'
 import { FileSymlink, LucideIcon, RotateCw, Terminal } from 'lucide-react'
@@ -141,7 +142,7 @@ const getUriBeingApplied = (applyBoxId: string) => {
 
 export const useApplyStreamState = ({ applyBoxId }: { applyBoxId: string }) => {
 	const accessor = useAccessor()
-	const parsonsCommandBarService = accessor.get('IParsonsCommandBarService')
+	const parsonsCommandBarService = accessor.get(IParsonsCommandBarService)
 
 	const getStreamState = useCallback(() => {
 		const uri = getUriBeingApplied(applyBoxId)
@@ -198,7 +199,7 @@ const tooltipPropsForApplyBlock = ({ tooltipName, color = undefined, position = 
 
 export const useEditToolStreamState = ({ applyBoxId, uri }: { applyBoxId: string, uri: URI }) => {
 	const accessor = useAccessor()
-	const parsonsCommandBarService = accessor.get('IParsonsCommandBarService')
+	const parsonsCommandBarService = accessor.get(IParsonsCommandBarService)
 	const [streamState, setStreamState] = useState(parsonsCommandBarService.getStreamState(uri))
 	// listen for stream updates on this box
 	useCommandBarURIListener(useCallback((uri_) => {

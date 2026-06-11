@@ -806,13 +806,13 @@ MenuRegistry.appendMenuItem(MenuId.GlobalActivity, {
 	title: localize('themes', "Themes"),
 	submenu: ThemesSubMenu,
 	group: '2_configuration',
-	order: 7
+	order: 8
 } satisfies ISubmenuItem);
 MenuRegistry.appendMenuItem(MenuId.MenubarPreferencesMenu, {
 	title: localize({ key: 'miSelectTheme', comment: ['&& denotes a mnemonic'] }, "&&Themes"),
 	submenu: ThemesSubMenu,
 	group: '2_configuration',
-	order: 7
+	order: 8
 } satisfies ISubmenuItem);
 
 MenuRegistry.appendMenuItem(ThemesSubMenu, {

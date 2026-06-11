@@ -197,12 +197,20 @@ registerAction2(class extends Action2 {
 
 
 
-// add to settings gear on bottom left
 MenuRegistry.appendMenuItem(MenuId.GlobalActivity, {
-	group: '0_command',
+	group: '2_configuration',
 	command: {
-		id: VOID_TOGGLE_SETTINGS_ACTION_ID,
-		title: nls.localize('voidSettingsActionGear', "Parsons\'s Settings")
+		id: VOID_OPEN_SETTINGS_ACTION_ID,
+		title: nls.localize('voidSettingsActionGear', "Parsons Settings")
 	},
-	order: 1
+	order: 2
+});
+
+MenuRegistry.appendMenuItem(MenuId.MenubarPreferencesMenu, {
+	group: '2_configuration',
+	command: {
+		id: VOID_OPEN_SETTINGS_ACTION_ID,
+		title: nls.localize({ key: 'openParsonsSettings', comment: ['&& denotes a mnemonic'] }, "&&Parsons Settings"),
+	},
+	order: 2
 });

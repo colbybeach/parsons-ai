@@ -361,7 +361,7 @@ class UserTasksGlobalActionContribution extends Disposable implements IWorkbench
 			},
 			when: TaskExecutionSupportedContext,
 			group: '2_configuration',
-			order: 6
+			order: 7
 		}));
 		this._register(MenuRegistry.appendMenuItem(MenuId.MenubarPreferencesMenu, {
 			command: {
@@ -370,7 +370,7 @@ class UserTasksGlobalActionContribution extends Disposable implements IWorkbench
 			},
 			when: TaskExecutionSupportedContext,
 			group: '2_configuration',
-			order: 6
+			order: 7
 		}));
 	}
 }

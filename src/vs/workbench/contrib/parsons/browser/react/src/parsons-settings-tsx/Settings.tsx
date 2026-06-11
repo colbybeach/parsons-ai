@@ -1161,7 +1161,7 @@ export const Settings = () => {
 
 					<div className='max-w-3xl'>
 
-						<h1 className='text-2xl w-full'>{`Parsons' Settings`}</h1>
+						<h1 className='text-2xl w-full'>{`Parsons Settings`}</h1>
 
 						<div className='w-full h-[1px] my-2' />
 

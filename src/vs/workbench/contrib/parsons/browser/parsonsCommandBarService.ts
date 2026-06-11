@@ -4,12 +4,12 @@
  *--------------------------------------------------------------------------------------*/
 
 import { Disposable, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
-import { createDecorator, IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { URI } from '../../../../base/common/uri.js';
 import * as dom from '../../../../base/browser/dom.js';
 import { Widget } from '../../../../base/browser/ui/widget.js';
 import { IOverlayWidget, ICodeEditor, OverlayWidgetPositionPreference } from '../../../../editor/browser/editorBrowser.js';
-import { Emitter, Event } from '../../../../base/common/event.js';
+import { Emitter } from '../../../../base/common/event.js';
 import { ICodeEditorService } from '../../../../editor/browser/services/codeEditorService.js';
 import { mountParsonsCommandBar } from './react/out/parsons-editor-widgets-tsx/index.js'
 import { deepClone } from '../../../../base/common/objects.js';
@@ -28,42 +28,9 @@ import { KeyMod } from '../../../../editor/common/services/editorBaseApi.js';
 import { KeyCode } from '../../../../base/common/keyCodes.js';
 import { ScrollType } from '../../../../editor/common/editorCommon.js';
 import { IVoidModelService } from '../common/parsonsModelService.js';
+import { CommandBarStateType, IParsonsCommandBarService, ParsonsCommandBarProps } from './parsonsCommandBarServiceInterface.js';
 
-
-
-export interface IParsonsCommandBarService {
-	readonly _serviceBrand: undefined;
-	stateOfURI: { [uri: string]: CommandBarStateType };
-	sortedURIs: URI[];
-	activeURI: URI | null;
-
-	onDidChangeState: Event<{ uri: URI }>;
-	onDidChangeActiveURI: Event<{ uri: URI | null }>;
-
-	getStreamState: (uri: URI) => 'streaming' | 'idle-has-changes' | 'idle-no-changes';
-	setDiffIdx(uri: URI, newIdx: number | null): void;
-
-	getNextDiffIdx(step: 1 | -1): number | null;
-	getNextUriIdx(step: 1 | -1): number | null;
-	goToDiffIdx(idx: number | null): void;
-	goToURIIdx(idx: number | null): Promise<void>;
-
-	acceptOrRejectAllFiles(opts: { behavior: 'reject' | 'accept' }): void;
-	anyFileIsStreaming(): boolean;
-
-}
-
-
-export const IParsonsCommandBarService = createDecorator<IParsonsCommandBarService>('ParsonsCommandBarService');
-
-
-export type CommandBarStateType = undefined | {
-	sortedDiffZoneIds: string[]; // sorted by line number
-	sortedDiffIds: string[]; // sorted by line number (computed)
-	isStreaming: boolean; // is any diffZone streaming in this URI
-
-	diffIdx: number | null; // must refresh whenever sortedDiffIds does so it's valid
-}
+export { CommandBarStateType, IParsonsCommandBarService, ParsonsCommandBarProps } from './parsonsCommandBarServiceInterface.js';
 
 
 
@@ -489,13 +456,6 @@ export class ParsonsCommandBarService extends Disposable implements IParsonsComm
 }
 
 registerSingleton(IParsonsCommandBarService, ParsonsCommandBarService, InstantiationType.Delayed); // delayed is needed here :(
-
-
-export type ParsonsCommandBarProps = {
-	uri: URI | null;
-	editor: ICodeEditor;
-}
-
 
 
 

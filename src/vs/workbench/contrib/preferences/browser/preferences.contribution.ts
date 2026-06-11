@@ -197,8 +197,8 @@ class PreferencesActionsContribution extends Disposable implements IWorkbenchCon
 				super({
 					id: SETTINGS_COMMAND_OPEN_SETTINGS,
 					title: {
-						...nls.localize2('settings', "Settings"),
-						mnemonicTitle: nls.localize({ key: 'miOpenSettings', comment: ['&& denotes a mnemonic'] }, "&&Settings"),
+						...nls.localize2('settings', "VS Code Settings"),
+						mnemonicTitle: nls.localize({ key: 'miOpenSettings', comment: ['&& denotes a mnemonic'] }, "&&VS Code Settings"),
 					},
 					keybinding: {
 						weight: KeybindingWeight.WorkbenchContrib,
@@ -208,11 +208,11 @@ class PreferencesActionsContribution extends Disposable implements IWorkbenchCon
 					menu: [{
 						id: MenuId.GlobalActivity,
 						group: '2_configuration',
-						order: 2
+						order: 3
 					}, {
 						id: MenuId.MenubarPreferencesMenu,
 						group: '2_configuration',
-						order: 2
+						order: 3
 					}],
 				});
 			}
@@ -788,7 +788,7 @@ class PreferencesActionsContribution extends Disposable implements IWorkbenchCon
 						{
 							id: MenuId.GlobalActivity,
 							group: '2_configuration',
-							order: 4
+							order: 5
 						}
 					]
 				});
@@ -805,7 +805,7 @@ class PreferencesActionsContribution extends Disposable implements IWorkbenchCon
 				title: nls.localize('keyboardShortcuts', "Keyboard Shortcuts"),
 			},
 			group: '2_configuration',
-			order: 4
+			order: 5
 		}));
 		this._register(registerAction2(class extends Action2 {
 			constructor() {
