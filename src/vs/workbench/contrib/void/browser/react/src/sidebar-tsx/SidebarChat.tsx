@@ -26,7 +26,7 @@ import { AlertTriangle, File, Ban, Check, ChevronRight, Dot, FileIcon, Pencil, U
 import { ChatMessage, CheckpointEntry, StagingSelectionItem, ToolMessage } from '../../../../common/chatThreadServiceTypes.js';
 import { approvalTypeOfBuiltinToolName, BuiltinToolCallParams, BuiltinToolName, ToolName, LintErrorItem, ToolApprovalType, toolApprovalTypes } from '../../../../common/toolsServiceTypes.js';
 import { CopyButton, EditToolAcceptRejectButtonsHTML, IconShell1, JumpToFileButton, JumpToTerminalButton, StatusIndicator, StatusIndicatorForApplyButton, useApplyStreamState, useEditToolStreamState } from '../markdown/ApplyBlockHoverButtons.js';
-import { IsRunningType } from '../../../chatThreadService.js';
+import { IsRunningType, LearningActivity, LearningActivityResponse } from '../../../chatThreadService.js';
 import { acceptAllBg, acceptBorder, buttonFontSize, buttonTextColor, rejectAllBg, rejectBg, rejectBorder } from '../../../../common/helpers/colors.js';
 import { builtinToolNames, isABuiltinToolName, MAX_FILE_CHARS_PAGE, MAX_TERMINAL_INACTIVE_TIME } from '../../../../common/prompt/prompts.js';
 import { RawToolCallObj } from '../../../../common/sendLLMMessageTypes.js';
@@ -1581,32 +1581,43 @@ const LearningQuestionModal = ({ toolMessage, assistantMessage, assistantMessage
 	const chatThreadsService = accessor.get('IChatThreadService')
 	const metricsService = accessor.get('IMetricsService')
 	const [learningAnswer, setLearningAnswer] = useState('')
+	const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null)
 	const [validationFeedback, setValidationFeedback] = useState<string | null>(null)
 	const [isValidating, setIsValidating] = useState(false)
-	const [isGeneratingQuestion, setIsGeneratingQuestion] = useState(true)
-	const [learningQuestion, setLearningQuestion] = useState<string | null>(null)
+	const [isGeneratingActivity, setIsGeneratingActivity] = useState(true)
+	const [learningActivity, setLearningActivity] = useState<LearningActivity | null>(null)
 
-	const canApprove = learningAnswer.trim().length >= 10
+	const canApprove = learningActivity?.kind === 'multiple_choice'
+		? selectedOptionId !== null
+		: learningActivity?.kind === 'short_answer'
+			? learningAnswer.trim().length >= 6
+			: false
 
 	useEffect(() => {
 		setLearningAnswer('')
+		setSelectedOptionId(null)
 		setValidationFeedback(null)
 		setIsValidating(false)
-		setIsGeneratingQuestion(true)
-		setLearningQuestion(null)
+		setIsGeneratingActivity(true)
+		setLearningActivity(null)
 	}, [toolMessage.id])
 
 	useEffect(() => {
 		let isMounted = true
-		setIsGeneratingQuestion(true)
-		chatThreadsService.generateLearningChallengeForLatestToolRequest({ threadId, toolId: toolMessage.id }).then((challenge) => {
+		setIsGeneratingActivity(true)
+		chatThreadsService.generateLearningChallengeForLatestToolRequest({ threadId, toolId: toolMessage.id }).then((activity) => {
 			if (!isMounted) return
-			setLearningQuestion(challenge.question)
-			setIsGeneratingQuestion(false)
+			setLearningActivity(activity)
+			setIsGeneratingActivity(false)
 		}).catch(() => {
 			if (!isMounted) return
-			setLearningQuestion('Explain what this change will do in your own words.')
-			setIsGeneratingQuestion(false)
+			setLearningActivity({
+				version: 1,
+				kind: 'short_answer',
+				prompt: 'What implementation pattern would you use for this step, and what would it handle?',
+				expectedAnswer: 'Accept any plausible implementation pattern or code-level consideration related to the task.'
+			})
+			setIsGeneratingActivity(false)
 		})
 		return () => { isMounted = false }
 	}, [chatThreadsService, threadId, toolMessage.id])
@@ -1623,21 +1634,24 @@ const LearningQuestionModal = ({ toolMessage, assistantMessage, assistantMessage
 	}, [chatThreadsService, metricsService, threadId, toolMessage.id])
 
 	const onAccept = useCallback(async () => {
-		if (!canApprove || isValidating) return
+		if (!canApprove || isValidating || !learningActivity) return
+		const response: LearningActivityResponse = learningActivity.kind === 'multiple_choice'
+			? { kind: 'multiple_choice', optionId: selectedOptionId! }
+			: { kind: 'short_answer', answer: learningAnswer }
 		setIsValidating(true)
 		setValidationFeedback(null)
-		const result = await chatThreadsService.validateLearningAnswerForLatestToolRequest({ threadId, toolId: toolMessage.id, learningAnswer })
+		const result = await chatThreadsService.validateLearningAnswerForLatestToolRequest({ threadId, toolId: toolMessage.id, response })
 		setIsValidating(false)
 		if (result.correct) {
 			onCloseForToolId(toolMessage.id)
 			chatThreadsService.approveLatestToolRequest(threadId, toolMessage.id)
-			metricsService.capture('Tool Request Accepted', { source: 'modal_after_learning_validation' })
+			metricsService.capture('Tool Request Accepted', { source: 'modal_after_learning_validation', activityKind: learningActivity.kind })
 		}
 		else {
 			setValidationFeedback(result.feedback)
-			metricsService.capture('Tool Request Learning Validation Failed', { source: 'modal' })
+			metricsService.capture('Tool Request Learning Validation Failed', { source: 'modal', activityKind: learningActivity.kind })
 		}
-	}, [canApprove, chatThreadsService, isValidating, learningAnswer, metricsService, onCloseForToolId, threadId, toolMessage.id])
+	}, [canApprove, chatThreadsService, isValidating, learningActivity, learningAnswer, metricsService, onCloseForToolId, selectedOptionId, threadId, toolMessage.id])
 
 	const onReject = useCallback(() => {
 		onCloseForToolId(toolMessage.id)
@@ -1650,86 +1664,155 @@ const LearningQuestionModal = ({ toolMessage, assistantMessage, assistantMessage
 		? toolNameToDesc(toolMessage.name, toolMessage.params as BuiltinToolCallParams[BuiltinToolName], accessor)
 		: { desc1: removeMCPToolNamePrefix(toolMessage.name), desc1Info: toolMessage.mcpServerName }
 
-	if (isGeneratingQuestion && !learningQuestion) return null
+	if (isGeneratingActivity && !learningActivity) return null
 
 	return <div
-		className='fixed inset-0 z-[1000] flex items-center justify-center bg-black/45 px-4'
+		className='fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 px-5 py-5'
 		onMouseDown={onReject}
 	>
 		<div
 			role='dialog'
 			aria-modal='true'
 			aria-labelledby='void-learning-question-modal-title'
-			className='w-full max-w-[420px] rounded-md border border-void-border-2 bg-void-bg-1 text-void-fg-1 shadow-2xl'
+			className='w-full max-w-[600px] overflow-hidden rounded-2xl border border-void-border-2 bg-void-bg-1 text-void-fg-1 shadow-2xl'
 			onMouseDown={(event) => event.stopPropagation()}
 		>
-			<div className='border-b border-void-border-2 px-4 py-3'>
-				<div id='void-learning-question-modal-title' className='text-base font-semibold'>
-					Test Your Knowledge
+			<div className='relative border-b border-void-border-2 bg-void-bg-2 px-6 py-4'>
+				<div className='mb-1.5 inline-flex rounded-full border border-void-border-2 bg-void-bg-1 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-void-fg-3'>
+					Before this runs
 				</div>
-				<div className='mt-1 text-sm text-void-fg-3'>
-					Answer the following question to approve the implementation.
+				<div id='void-learning-question-modal-title' className='pr-10 text-2xl font-semibold leading-tight'>
+					Check your understanding
 				</div>
+				<p className='mt-1.5 max-w-[460px] text-sm leading-relaxed text-void-fg-3'>
+					Complete this quick activity to approve the implementation and let the agent continue.
+				</p>
+				<button
+					type='button'
+					onClick={onReject}
+					aria-label='Close and cancel implementation'
+					className='absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-lg text-void-fg-3 hover:bg-void-bg-3 hover:text-void-fg-1'
+				>
+					<X size={19} />
+				</button>
 			</div>
-			<div className='max-h-[70vh] overflow-auto px-4 py-4'>
-				{assistantMessage?.displayContent ? <div className='rounded border border-void-border-2 bg-void-bg-2 px-3 py-2'>
-					<ProseWrapper>
-						<ChatMarkdownRender
-							string={assistantMessage.displayContent}
-							chatMessageLocation={assistantMessageIdx === null ? undefined : { threadId, messageIdx: assistantMessageIdx }}
-							isApplyEnabled={false}
-							isLinkDetectionEnabled={true}
-						/>
-					</ProseWrapper>
-				</div> : null}
-				<div className='text-sm text-void-fg-2'>{desc1}</div>
-				{desc1Info ? <div className='mt-1 break-all text-xs text-void-fg-3'>{desc1Info}</div> : null}
-				<div className='mt-4'>
-					<label className='block text-lg font-semibold leading-snug text-void-fg-1' htmlFor='void-tool-request-learning-answer'>
-						{learningQuestion}
-					</label>
-					<textarea
+			<div className='max-h-[62vh] overflow-auto px-6 py-4'>
+				<div className='rounded-xl border border-void-border-2 bg-void-bg-2 p-3.5'>
+					<div className='mb-2 text-xs font-semibold uppercase tracking-wide text-void-fg-3'>
+						Current task
+					</div>
+					{assistantMessage?.displayContent ? <div className='text-[15px] leading-relaxed'>
+						<ProseWrapper>
+							<ChatMarkdownRender
+								string={assistantMessage.displayContent}
+								chatMessageLocation={assistantMessageIdx === null ? undefined : { threadId, messageIdx: assistantMessageIdx }}
+								isApplyEnabled={false}
+								isLinkDetectionEnabled={true}
+							/>
+						</ProseWrapper>
+					</div> : null}
+					<div className={`${assistantMessage?.displayContent ? 'mt-3 border-t border-void-border-2 pt-3' : ''} text-sm font-medium text-void-fg-2`}>
+						{desc1}
+					</div>
+					{desc1Info ? <div className='mt-1 break-all text-xs text-void-fg-3'>{desc1Info}</div> : null}
+				</div>
+				{learningActivity ? <div className='mt-4'>
+					<div className='text-xl font-semibold leading-snug text-void-fg-1'>
+						{learningActivity.prompt}
+					</div>
+					{learningActivity.context ? <div className='mt-3 overflow-hidden rounded-xl border border-void-border-2 bg-void-bg-3'>
+						<div className='flex items-center justify-between border-b border-void-border-2 px-3.5 py-2 text-xs font-medium text-void-fg-3'>
+							<span>{learningActivity.context.title || 'Code context'}</span>
+							{learningActivity.context.language ? <span className='uppercase tracking-wide'>{learningActivity.context.language}</span> : null}
+						</div>
+						<pre className='max-h-[220px] overflow-auto whitespace-pre-wrap px-4 py-3 font-mono text-[13px] leading-relaxed text-void-fg-1'>
+							<code>{learningActivity.context.code}</code>
+						</pre>
+					</div> : null}
+					{learningActivity.kind === 'multiple_choice' ? <div className='mt-3 space-y-2' role='radiogroup' aria-label={learningActivity.prompt}>
+						{learningActivity.options.map((option, index) => {
+							const isSelected = selectedOptionId === option.id
+							return <label
+								key={option.id}
+								className={`group flex cursor-pointer items-center gap-3 rounded-xl border px-3.5 py-2.5 text-[15px] leading-relaxed transition-colors ${isSelected
+									? 'border-[var(--vscode-focusBorder)] bg-void-bg-3'
+									: 'border-void-border-2 bg-void-bg-1 hover:border-void-border-1 hover:bg-void-bg-2'
+									}`}
+							>
+								<input
+									type='radio'
+									name={`void-learning-activity-${toolMessage.id}`}
+									value={option.id}
+									checked={isSelected}
+									onChange={() => {
+										setSelectedOptionId(option.id)
+										setValidationFeedback(null)
+									}}
+									disabled={isValidating || isGeneratingActivity}
+									autoFocus={index === 0}
+									className='sr-only'
+								/>
+								<span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border text-sm font-semibold ${isSelected
+									? 'border-[var(--vscode-focusBorder)] bg-[var(--vscode-button-background)] text-[var(--vscode-button-foreground)]'
+									: 'border-void-border-2 bg-void-bg-2 text-void-fg-3 group-hover:text-void-fg-1'
+									}`}>
+										{String.fromCharCode(65 + index)}
+									</span>
+								{option.format === 'code'
+									? <pre className='flex-1 whitespace-pre-wrap rounded-lg bg-void-bg-3 px-3 py-2 font-mono text-[13px] leading-relaxed text-void-fg-1'><code>{option.label}</code></pre>
+									: <span className='flex-1'>{option.label}</span>}
+								<span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${isSelected
+									? 'border-[var(--vscode-focusBorder)] bg-[var(--vscode-button-background)] text-[var(--vscode-button-foreground)]'
+									: 'border-void-border-2'
+									}`}>
+									{isSelected ? <Check size={14} strokeWidth={2.5} /> : null}
+								</span>
+							</label>
+						})}
+					</div> : <textarea
 						id='void-tool-request-learning-answer'
 						value={learningAnswer}
 						onChange={(event) => {
 							setLearningAnswer(event.target.value)
 							setValidationFeedback(null)
 						}}
-						className='mt-2 min-h-[88px] w-full resize-y rounded border border-void-border-2 bg-void-bg-3 px-2 py-2 text-sm text-void-fg-1 outline-none focus:border-[var(--vscode-focusBorder)]'
+						className='mt-3 min-h-[104px] w-full resize-y rounded-xl border border-void-border-2 bg-void-bg-2 px-4 py-3 text-[15px] leading-relaxed text-void-fg-1 outline-none focus:border-[var(--vscode-focusBorder)]'
 						placeholder='For example: This will add a confirmation step before edits are applied...'
-						disabled={isValidating || isGeneratingQuestion}
+						disabled={isValidating || isGeneratingActivity}
 						autoFocus
-					/>
-					{validationFeedback ? <div className='mt-2 rounded border border-[var(--vscode-inputValidation-warningBorder)] bg-[var(--vscode-inputValidation-warningBackground)] px-2 py-1.5 text-xs text-[var(--vscode-inputValidation-warningForeground)]'>
+					/>}
+					{validationFeedback ? <div className='mt-3 rounded-xl border border-[var(--vscode-inputValidation-warningBorder)] bg-[var(--vscode-inputValidation-warningBackground)] px-4 py-3 text-sm leading-relaxed text-[var(--vscode-inputValidation-warningForeground)]'>
 						{validationFeedback}
 					</div> : null}
-					<div className='mt-1 text-xs text-void-fg-3'>
-						{isGeneratingQuestion
-							? 'Generating a tailored learning question...'
+					<div className='mt-2 text-sm text-void-fg-3'>
+						{isGeneratingActivity
+							? 'Generating a tailored learning activity...'
 							: isValidating
 								? 'Checking your understanding...'
 								: canApprove
 									? 'Ready to check understanding.'
-									: 'Write at least 10 characters to approve the implementation.'}
+									: learningActivity.kind === 'multiple_choice'
+										? 'Choose one answer to continue.'
+										: 'Write a brief response to approve the implementation.'}
 					</div>
-				</div>
+				</div> : null}
 			</div>
-			<div className='flex justify-end gap-2 border-t border-void-border-2 px-4 py-3'>
+			<div className='flex items-center justify-end gap-3 border-t border-void-border-2 bg-void-bg-2 px-6 py-3'>
 				<button
 					onClick={onReject}
-					className='rounded bg-[var(--vscode-button-secondaryBackground)] px-3 py-1.5 text-sm font-medium text-[var(--vscode-button-secondaryForeground)] hover:bg-[var(--vscode-button-secondaryHoverBackground)]'
+					className='min-w-[96px] rounded-lg bg-[var(--vscode-button-secondaryBackground)] px-5 py-2 text-[15px] font-medium text-[var(--vscode-button-secondaryForeground)] hover:bg-[var(--vscode-button-secondaryHoverBackground)]'
 				>
 					Cancel
 				</button>
 				<button
 					onClick={onAccept}
-					disabled={!canApprove || isValidating || isGeneratingQuestion}
-					className={`rounded px-3 py-1.5 text-sm font-medium ${canApprove && !isValidating && !isGeneratingQuestion
+					disabled={!canApprove || isValidating || isGeneratingActivity}
+					className={`min-w-[132px] rounded-lg px-5 py-2 text-[15px] font-semibold ${canApprove && !isValidating && !isGeneratingActivity
 						? 'bg-[var(--vscode-button-background)] text-[var(--vscode-button-foreground)] hover:bg-[var(--vscode-button-hoverBackground)]'
 						: 'cursor-not-allowed bg-[var(--vscode-button-secondaryBackground)] text-[var(--vscode-disabledForeground)]'
 						}`}
 				>
-					{isGeneratingQuestion ? 'Preparing...' : isValidating ? 'Checking...' : 'Submit'}
+					{isGeneratingActivity ? 'Preparing...' : isValidating ? 'Checking...' : 'Submit'}
 				</button>
 			</div>
 		</div>
