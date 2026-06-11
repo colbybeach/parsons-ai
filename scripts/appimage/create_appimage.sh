@@ -46,7 +46,7 @@ if [ ! -f "appimagetool" ]; then
 fi
 
 # Delete any existing AppImage to avoid bloating the build
-rm -f Void-x86_64.AppImage
+rm -f Parsons-x86_64.AppImage
 
 # Create build Dockerfile
 echo "Creating build Dockerfile..."
@@ -101,68 +101,68 @@ docker build --no-cache -t "$BUILD_IMAGE_NAME" -f Dockerfile.build .
 echo "Creating AppImage..."
 docker run --rm --privileged -v "$(pwd):/app" "$BUILD_IMAGE_NAME" bash -c '
 cd /app && \
-rm -rf VoidApp.AppDir && \
-mkdir -p VoidApp.AppDir/usr/bin VoidApp.AppDir/usr/lib VoidApp.AppDir/usr/share/applications && \
-find . -maxdepth 1 ! -name VoidApp.AppDir ! -name "." ! -name ".." -exec cp -r {} VoidApp.AppDir/usr/bin/ \; && \
-cp parsons.png VoidApp.AppDir/ && \
-echo "[Desktop Entry]" > VoidApp.AppDir/void.desktop && \
-echo "Name=Void" >> VoidApp.AppDir/void.desktop && \
-echo "Comment=Open source AI code editor." >> VoidApp.AppDir/void.desktop && \
-echo "GenericName=Text Editor" >> VoidApp.AppDir/void.desktop && \
-echo "Exec=void %F" >> VoidApp.AppDir/void.desktop && \
-echo "Icon=parsons" >> VoidApp.AppDir/void.desktop && \
-echo "Type=Application" >> VoidApp.AppDir/void.desktop && \
-echo "StartupNotify=false" >> VoidApp.AppDir/void.desktop && \
-echo "StartupWMClass=Void" >> VoidApp.AppDir/void.desktop && \
-echo "Categories=TextEditor;Development;IDE;" >> VoidApp.AppDir/void.desktop && \
-echo "MimeType=application/x-void-workspace;" >> VoidApp.AppDir/void.desktop && \
-echo "Keywords=void;" >> VoidApp.AppDir/void.desktop && \
-echo "Actions=new-empty-window;" >> VoidApp.AppDir/void.desktop && \
-echo "[Desktop Action new-empty-window]" >> VoidApp.AppDir/void.desktop && \
-echo "Name=New Empty Window" >> VoidApp.AppDir/void.desktop && \
-echo "Name[de]=Neues leeres Fenster" >> VoidApp.AppDir/void.desktop && \
-echo "Name[es]=Nueva ventana vacía" >> VoidApp.AppDir/void.desktop && \
-echo "Name[fr]=Nouvelle fenêtre vide" >> VoidApp.AppDir/void.desktop && \
-echo "Name[it]=Nuova finestra vuota" >> VoidApp.AppDir/void.desktop && \
-echo "Name[ja]=新しい空のウィンドウ" >> VoidApp.AppDir/void.desktop && \
-echo "Name[ko]=새 빈 창" >> VoidApp.AppDir/void.desktop && \
-echo "Name[ru]=Новое пустое окно" >> VoidApp.AppDir/void.desktop && \
-echo "Name[zh_CN]=新建空窗口" >> VoidApp.AppDir/void.desktop && \
-echo "Name[zh_TW]=開新空視窗" >> VoidApp.AppDir/void.desktop && \
-echo "Exec=void --new-window %F" >> VoidApp.AppDir/void.desktop && \
-echo "Icon=parsons" >> VoidApp.AppDir/void.desktop && \
-chmod +x VoidApp.AppDir/void.desktop && \
-cp VoidApp.AppDir/void.desktop VoidApp.AppDir/usr/share/applications/ && \
-echo "[Desktop Entry]" > VoidApp.AppDir/void-url-handler.desktop && \
-echo "Name=Void - URL Handler" > VoidApp.AppDir/void-url-handler.desktop && \
-echo "Comment=Open source AI code editor." > VoidApp.AppDir/void-url-handler.desktop && \
-echo "GenericName=Text Editor" > VoidApp.AppDir/void-url-handler.desktop && \
-echo "Exec=void --open-url %U" > VoidApp.AppDir/void-url-handler.desktop && \
-echo "Icon=parsons" > VoidApp.AppDir/void-url-handler.desktop && \
-echo "Type=Application" > VoidApp.AppDir/void-url-handler.desktop && \
-echo "NoDisplay=true" > VoidApp.AppDir/void-url-handler.desktop && \
-echo "StartupNotify=true" > VoidApp.AppDir/void-url-handler.desktop && \
-echo "Categories=Utility;TextEditor;Development;IDE;" > VoidApp.AppDir/void-url-handler.desktop && \
-echo "MimeType=x-scheme-handler/void;" > VoidApp.AppDir/void-url-handler.desktop && \
-echo "Keywords=void;" > VoidApp.AppDir/void-url-handler.desktop && \
-chmod +x VoidApp.AppDir/void-url-handler.desktop && \
-cp VoidApp.AppDir/void-url-handler.desktop VoidApp.AppDir/usr/share/applications/ && \
-echo "#!/bin/bash" > VoidApp.AppDir/AppRun && \
-echo "HERE=\$(dirname \"\$(readlink -f \"\${0}\")\")" >> VoidApp.AppDir/AppRun && \
-echo "export PATH=\${HERE}/usr/bin:\${PATH}" >> VoidApp.AppDir/AppRun && \
-echo "export LD_LIBRARY_PATH=\${HERE}/usr/lib:\${LD_LIBRARY_PATH}" >> VoidApp.AppDir/AppRun && \
-echo "exec \${HERE}/usr/bin/void --no-sandbox \"\$@\"" >> VoidApp.AppDir/AppRun && \
-chmod +x VoidApp.AppDir/AppRun && \
-chmod -R 755 VoidApp.AppDir && \
+rm -rf ParsonsApp.AppDir && \
+mkdir -p ParsonsApp.AppDir/usr/bin ParsonsApp.AppDir/usr/lib ParsonsApp.AppDir/usr/share/applications && \
+find . -maxdepth 1 ! -name ParsonsApp.AppDir ! -name "." ! -name ".." -exec cp -r {} ParsonsApp.AppDir/usr/bin/ \; && \
+cp parsons.png ParsonsApp.AppDir/ && \
+echo "[Desktop Entry]" > ParsonsApp.AppDir/parsons.desktop && \
+echo "Name=Parsons" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Comment=Open source AI code editor." >> ParsonsApp.AppDir/parsons.desktop && \
+echo "GenericName=Text Editor" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Exec=parsons %F" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Icon=parsons" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Type=Application" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "StartupNotify=false" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "StartupWMClass=Parsons" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Categories=TextEditor;Development;IDE;" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "MimeType=application/x-parsons-workspace;" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Keywords=parsons;" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Actions=new-empty-window;" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "[Desktop Action new-empty-window]" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Name=New Empty Window" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Name[de]=Neues leeres Fenster" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Name[es]=Nueva ventana vacía" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Name[fr]=Nouvelle fenêtre vide" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Name[it]=Nuova finestra vuota" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Name[ja]=新しい空のウィンドウ" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Name[ko]=새 빈 창" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Name[ru]=Новое пустое окно" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Name[zh_CN]=新建空窗口" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Name[zh_TW]=開新空視窗" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Exec=parsons --new-window %F" >> ParsonsApp.AppDir/parsons.desktop && \
+echo "Icon=parsons" >> ParsonsApp.AppDir/parsons.desktop && \
+chmod +x ParsonsApp.AppDir/parsons.desktop && \
+cp ParsonsApp.AppDir/parsons.desktop ParsonsApp.AppDir/usr/share/applications/ && \
+echo "[Desktop Entry]" > ParsonsApp.AppDir/parsons-url-handler.desktop && \
+echo "Name=Parsons - URL Handler" > ParsonsApp.AppDir/parsons-url-handler.desktop && \
+echo "Comment=Open source AI code editor." > ParsonsApp.AppDir/parsons-url-handler.desktop && \
+echo "GenericName=Text Editor" > ParsonsApp.AppDir/parsons-url-handler.desktop && \
+echo "Exec=parsons --open-url %U" > ParsonsApp.AppDir/parsons-url-handler.desktop && \
+echo "Icon=parsons" > ParsonsApp.AppDir/parsons-url-handler.desktop && \
+echo "Type=Application" > ParsonsApp.AppDir/parsons-url-handler.desktop && \
+echo "NoDisplay=true" > ParsonsApp.AppDir/parsons-url-handler.desktop && \
+echo "StartupNotify=true" > ParsonsApp.AppDir/parsons-url-handler.desktop && \
+echo "Categories=Utility;TextEditor;Development;IDE;" > ParsonsApp.AppDir/parsons-url-handler.desktop && \
+echo "MimeType=x-scheme-handler/parsons;" > ParsonsApp.AppDir/parsons-url-handler.desktop && \
+echo "Keywords=parsons;" > ParsonsApp.AppDir/parsons-url-handler.desktop && \
+chmod +x ParsonsApp.AppDir/parsons-url-handler.desktop && \
+cp ParsonsApp.AppDir/parsons-url-handler.desktop ParsonsApp.AppDir/usr/share/applications/ && \
+echo "#!/bin/bash" > ParsonsApp.AppDir/AppRun && \
+echo "HERE=\$(dirname \"\$(readlink -f \"\${0}\")\")" >> ParsonsApp.AppDir/AppRun && \
+echo "export PATH=\${HERE}/usr/bin:\${PATH}" >> ParsonsApp.AppDir/AppRun && \
+echo "export LD_LIBRARY_PATH=\${HERE}/usr/lib:\${LD_LIBRARY_PATH}" >> ParsonsApp.AppDir/AppRun && \
+echo "exec \${HERE}/usr/bin/parsons --no-sandbox \"\$@\"" >> ParsonsApp.AppDir/AppRun && \
+chmod +x ParsonsApp.AppDir/AppRun && \
+chmod -R 755 ParsonsApp.AppDir && \
 
 # Strip unneeded symbols from the binary to reduce size
-strip --strip-unneeded VoidApp.AppDir/usr/bin/void
+strip --strip-unneeded ParsonsApp.AppDir/usr/bin/parsons
 
-ls -la VoidApp.AppDir/ && \
-ARCH=x86_64 ./appimagetool -n VoidApp.AppDir Void-x86_64.AppImage
+ls -la ParsonsApp.AppDir/ && \
+ARCH=x86_64 ./appimagetool -n ParsonsApp.AppDir Parsons-x86_64.AppImage
 '
 
 # Clean up
-rm -rf VoidApp.AppDir .dockerignore appimagetool
+rm -rf ParsonsApp.AppDir .dockerignore appimagetool
 
-echo "AppImage creation complete! Your AppImage is: Void-x86_64.AppImage"
+echo "AppImage creation complete! Your AppImage is: Parsons-x86_64.AppImage"

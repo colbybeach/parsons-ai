@@ -60,7 +60,7 @@ Exec=void
 Icon=parsons
 Type=Application
 Categories=Utility;
-Comment=Void Linux Application
+Comment=Parsons Linux Application
 EOF
 then
     echo "Error creating desktop file"

@@ -40,10 +40,10 @@ export default tseslint.config(
 		},
 		rules: {
 			'constructor-super': 'warn',
-			'curly': 'off', // <-- Void
+			'curly': 'off', // <-- Parsons
 			'eqeqeq': 'warn',
 			'prefer-const': [
-				'off', // <-- Void
+				'off', // <-- Parsons
 				{
 					'destructuring': 'all'
 				}
@@ -83,7 +83,7 @@ export default tseslint.config(
 			'local/code-parameter-properties-must-have-explicit-accessibility': 'warn',
 			'local/code-no-nls-in-standalone-editor': 'warn',
 			'local/code-no-potentially-unsafe-disposables': 'warn',
-			'local/code-no-dangerous-type-assertions': 'off', // Void warn -> off
+			'local/code-no-dangerous-type-assertions': 'off', // Parsons warn -> off
 			'local/code-no-standalone-editor': 'warn',
 			'local/code-no-unexternalized-strings': 'warn',
 			'local/code-must-use-super-dispose': 'warn',
@@ -113,7 +113,7 @@ export default tseslint.config(
 					]
 				}
 			],
-			// Void - this should only apply to workbench/void/
+			// Parsons - this should only apply to workbench/void/
 			// 'header/header': [
 			// 	2,
 			// 	'block',
@@ -141,8 +141,8 @@ export default tseslint.config(
 			'jsdoc': pluginJsdoc,
 		},
 		rules: {
-			'@stylistic/ts/semi': 'off', // <-- Void
-			'@stylistic/ts/member-delimiter-style': 'off', // <-- Void
+			'@stylistic/ts/semi': 'off', // <-- Parsons
+			'@stylistic/ts/member-delimiter-style': 'off', // <-- Parsons
 			'local/code-no-unused-expressions': [
 				'warn',
 				{
@@ -150,7 +150,7 @@ export default tseslint.config(
 				}
 			],
 			'jsdoc/no-types': 'warn',
-			'local/code-no-static-self-ref': 'off' // <-- Void
+			'local/code-no-static-self-ref': 'off' // <-- Parsons
 		}
 	},
 	// vscode TS
@@ -843,7 +843,7 @@ export default tseslint.config(
 						'yauzl',
 						'yazl',
 						'zlib',
-						// Void added this
+						// Parsons added this
 						'@modelcontextprotocol/sdk/**'
 					]
 				},

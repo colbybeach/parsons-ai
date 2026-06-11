@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Parsons - URL Handler
+Comment=Open source AI code editor.
+GenericName=Text Editor
+Exec=parsons --open-url %U
+Icon=parsons
+Type=Application
+NoDisplay=true
+StartupNotify=true
+Categories=Utility;TextEditor;Development;IDE;
+MimeType=x-scheme-handler/parsons;
+Keywords=parsons;

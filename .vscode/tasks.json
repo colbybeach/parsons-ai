@@ -29,7 +29,7 @@
 				}
 			}
 		},
-		{   // Void added this
+		{   // Parsons added this
 			"type": "npm",
 			"script": "watchreactd",
 			"label": "React - Build",

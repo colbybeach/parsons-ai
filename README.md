@@ -2,7 +2,7 @@
 
 <div align="center">
 	<img
-		src="./void_icons/parsons_icon.png"
+		src="./parsons_icons/parsons_icon.png"
 	 	alt="Parsons Welcome"
 		width="300"
 	 	height="300"
@@ -19,4 +19,4 @@ This repository contains the full source code for Parsons.ai. If you're new, wel
 
 ## Reference
 
-Parsons is a fork of the [vscode](https://github.com/microsoft/vscode) repository. Fork is also a fork of Void. See [VOID_CODEBASE_GUIDE](https://github.com/voideditor/void/blob/main/VOID_CODEBASE_GUIDE.md) for Void.
+Parsons is a fork of the [VS Code](https://github.com/microsoft/vscode) repository. See the [Parsons codebase guide](./PARSONS_CODEBASE_GUIDE.md) for an overview of the editor architecture.
