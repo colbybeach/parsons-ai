@@ -69,6 +69,12 @@ export type GeminiLLMChatMessage = {
 
 export type LLMChatMessage = AnthropicLLMChatMessage | OpenAILLMChatMessage | GeminiLLMChatMessage
 
+export type StructuredOutputRequest = {
+	name: string;
+	description?: string;
+	schema: Record<string, unknown>;
+	strict?: boolean;
+}
 
 
 export type LLMFIMMessage = {
@@ -104,11 +110,13 @@ type SendLLMType = {
 	messages: LLMChatMessage[]; // the type of raw chat messages that we send to Anthropic, OAI, etc
 	separateSystemMessage: string | undefined;
 	chatMode: ChatMode | null;
+	structuredOutput?: StructuredOutputRequest;
 } | {
 	messagesType: 'FIMMessage';
 	messages: LLMFIMMessage;
 	separateSystemMessage?: undefined;
 	chatMode?: undefined;
+	structuredOutput?: undefined;
 }
 export type ServiceSendLLMMessageParams = {
 	onText: OnText;
@@ -209,7 +217,6 @@ export type MainModelListParams<modelResponse> = Omit<ModelListParams<modelRespo
 
 export type EventModelListOnSuccessParams<modelResponse> = Parameters<ModelListParams<modelResponse>['onSuccess']>[0] & { requestId: string }
 export type EventModelListOnErrorParams<modelResponse> = Parameters<ModelListParams<modelResponse>['onError']>[0] & { requestId: string }
-
 
 
 

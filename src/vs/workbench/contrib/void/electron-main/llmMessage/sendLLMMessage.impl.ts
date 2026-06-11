@@ -14,7 +14,7 @@ import { Tool as GeminiTool, FunctionDeclaration, GoogleGenAI, ThinkingConfig, S
 import { GoogleAuth } from 'google-auth-library'
 /* eslint-enable */
 
-import { AnthropicLLMChatMessage, GeminiLLMChatMessage, LLMChatMessage, LLMFIMMessage, ModelListParams, OllamaModelResponse, OnError, OnFinalMessage, OnText, RawToolCallObj, RawToolParamsObj } from '../../common/sendLLMMessageTypes.js';
+import { AnthropicLLMChatMessage, GeminiLLMChatMessage, LLMChatMessage, LLMFIMMessage, ModelListParams, OllamaModelResponse, OnError, OnFinalMessage, OnText, RawToolCallObj, RawToolParamsObj, StructuredOutputRequest } from '../../common/sendLLMMessageTypes.js';
 import { ChatMode, displayInfoOfProviderName, ModelSelectionOptions, OverridesOfModel, ProviderName, SettingsOfProvider } from '../../common/voidSettingsTypes.js';
 import { getSendableReasoningInfo, getModelCapabilities, getProviderCapabilities, defaultProviderSettings, getReservedOutputTokenSpace } from '../../common/modelCapabilities.js';
 import { extractReasoningWrapper, extractXMLToolsWrapper } from './extractGrammar.js';
@@ -27,6 +27,45 @@ const getGoogleApiKey = async () => {
 	const key = await auth.getAccessToken()
 	if (!key) throw new Error(`Google API failed to generate a key.`)
 	return key
+}
+
+const googleSchemaType = (type: unknown): Type | undefined => {
+	if (type === 'string') return Type.STRING
+	if (type === 'number') return Type.NUMBER
+	if (type === 'integer') return Type.INTEGER
+	if (type === 'boolean') return Type.BOOLEAN
+	if (type === 'array') return Type.ARRAY
+	if (type === 'object') return Type.OBJECT
+	return undefined
+}
+
+const toGoogleSchema = (schema: Record<string, unknown>): Schema => {
+	const rawAnyOf = Array.isArray(schema.anyOf) ? schema.anyOf as Record<string, unknown>[] : []
+	const nullable = rawAnyOf.some(item => item.type === 'null')
+	const nonNullAnyOf = rawAnyOf.filter(item => item.type !== 'null')
+	if (!schema.type && nullable && nonNullAnyOf.length === 1) {
+		return { ...toGoogleSchema(nonNullAnyOf[0]), nullable: true }
+	}
+	const properties = schema.properties && typeof schema.properties === 'object'
+		? Object.fromEntries(Object.entries(schema.properties as Record<string, Record<string, unknown>>).map(([key, value]) => [key, toGoogleSchema(value)]))
+		: undefined
+	const items = schema.items && typeof schema.items === 'object'
+		? toGoogleSchema(schema.items as Record<string, unknown>)
+		: undefined
+	const anyOf = nonNullAnyOf.length > 0
+		? nonNullAnyOf.map(item => toGoogleSchema(item))
+		: undefined
+	return {
+		...(googleSchemaType(schema.type) ? { type: googleSchemaType(schema.type) } : {}),
+		...(typeof schema.description === 'string' ? { description: schema.description } : {}),
+		...(Array.isArray(schema.enum) ? { enum: schema.enum.filter((value): value is string => typeof value === 'string') } : {}),
+		...(Array.isArray(schema.required) ? { required: schema.required.filter((value): value is string => typeof value === 'string') } : {}),
+		...(properties ? { properties } : {}),
+		...(items ? { items } : {}),
+		...(anyOf ? { anyOf } : {}),
+		...(typeof schema.minItems === 'number' ? { minItems: String(schema.minItems) } : {}),
+		...(typeof schema.maxItems === 'number' ? { maxItems: String(schema.maxItems) } : {}),
+	}
 }
 
 
@@ -49,6 +88,7 @@ type SendChatParams_Internal = InternalCommonMessageParams & {
 	separateSystemMessage: string | undefined;
 	chatMode: ChatMode | null;
 	mcpTools: InternalToolInfo[] | undefined;
+	structuredOutput: StructuredOutputRequest | undefined;
 }
 type SendFIMParams_Internal = InternalCommonMessageParams & { messages: LLMFIMMessage; separateSystemMessage: string | undefined; }
 export type ListParams_Internal<ModelResponse> = ModelListParams<ModelResponse>
@@ -270,7 +310,7 @@ const rawToolCallObjOfAnthropicParams = (toolBlock: Anthropic.Messages.ToolUseBl
 // ------------ OPENAI-COMPATIBLE ------------
 
 
-const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onError, settingsOfProvider, modelSelectionOptions, modelName: modelName_, _setAborter, providerName, chatMode, separateSystemMessage, overridesOfModel, mcpTools }: SendChatParams_Internal) => {
+const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onError, settingsOfProvider, modelSelectionOptions, modelName: modelName_, _setAborter, providerName, chatMode, separateSystemMessage, overridesOfModel, mcpTools, structuredOutput }: SendChatParams_Internal) => {
 	const {
 		modelName,
 		specialToolFormat,
@@ -294,6 +334,19 @@ const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onE
 	const nativeToolsObj = potentialTools && specialToolFormat === 'openai-style' ?
 		{ tools: potentialTools } as const
 		: {}
+	const structuredOutputObj = structuredOutput && providerName === 'openAI'
+		? {
+			response_format: {
+				type: 'json_schema' as const,
+				json_schema: {
+					name: structuredOutput.name,
+					description: structuredOutput.description,
+					schema: structuredOutput.schema,
+					strict: structuredOutput.strict ?? true,
+				}
+			}
+		}
+		: {}
 
 	// instance
 	const openai: OpenAI = await newOpenAICompatibleSDK({ providerName, settingsOfProvider, includeInPayload })
@@ -306,6 +359,7 @@ const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onE
 		messages: messages as any,
 		stream: true,
 		...nativeToolsObj,
+		...structuredOutputObj,
 		...additionalOpenAIPayload
 		// max_completion_tokens: maxTokens,
 	}
@@ -455,7 +509,7 @@ const anthropicTools = (chatMode: ChatMode | null, mcpTools: InternalToolInfo[] 
 
 
 // ------------ ANTHROPIC ------------
-const sendAnthropicChat = async ({ messages, providerName, onText, onFinalMessage, onError, settingsOfProvider, modelSelectionOptions, overridesOfModel, modelName: modelName_, _setAborter, separateSystemMessage, chatMode, mcpTools }: SendChatParams_Internal) => {
+const sendAnthropicChat = async ({ messages, providerName, onText, onFinalMessage, onError, settingsOfProvider, modelSelectionOptions, overridesOfModel, modelName: modelName_, _setAborter, separateSystemMessage, chatMode, mcpTools, structuredOutput }: SendChatParams_Internal) => {
 	const {
 		modelName,
 		specialToolFormat,
@@ -472,8 +526,15 @@ const sendAnthropicChat = async ({ messages, providerName, onText, onFinalMessag
 	const maxTokens = getReservedOutputTokenSpace(providerName, modelName_, { isReasoningEnabled: !!reasoningInfo?.isReasoningEnabled, overridesOfModel })
 
 	// tools
-	const potentialTools = anthropicTools(chatMode, mcpTools)
-	const nativeToolsObj = potentialTools && specialToolFormat === 'anthropic-style' ?
+	const structuredOutputTool: Anthropic.Messages.Tool | undefined = structuredOutput ? {
+		name: structuredOutput.name,
+		description: structuredOutput.description ?? 'Return the requested structured response.',
+		input_schema: structuredOutput.schema as Anthropic.Messages.Tool.InputSchema,
+	} : undefined
+	const potentialTools = structuredOutputTool ? [structuredOutputTool] : anthropicTools(chatMode, mcpTools)
+	const nativeToolsObj = structuredOutputTool
+		? { tools: [structuredOutputTool], tool_choice: { type: 'tool' as const, name: structuredOutputTool.name, disable_parallel_tool_use: true } }
+		: potentialTools && specialToolFormat === 'anthropic-style' ?
 		{ tools: potentialTools, tool_choice: { type: 'auto' } } as const
 		: {}
 
@@ -563,6 +624,17 @@ const sendAnthropicChat = async ({ messages, providerName, onText, onFinalMessag
 	stream.on('finalMessage', (response) => {
 		const anthropicReasoning = response.content.filter(c => c.type === 'thinking' || c.type === 'redacted_thinking')
 		const tools = response.content.filter(c => c.type === 'tool_use')
+		if (structuredOutput) {
+			const structuredTool = tools.find(tool => tool.name === structuredOutput.name)
+			if (!structuredTool) {
+				onError({ message: 'Anthropic did not return the required structured output tool.', fullError: null })
+				return
+			}
+			const structuredText = JSON.stringify(structuredTool.input)
+			onText({ fullText: structuredText, fullReasoning, })
+			onFinalMessage({ fullText: structuredText, fullReasoning, anthropicReasoning })
+			return
+		}
 		// console.log('TOOLS!!!!!!', JSON.stringify(tools, null, 2))
 		// console.log('TOOLS!!!!!!', JSON.stringify(response, null, 2))
 		const toolCall = tools[0] && rawToolCallObjOfAnthropicParams(tools[0])
@@ -728,6 +800,7 @@ const sendGeminiChat = async ({
 	modelSelectionOptions,
 	chatMode,
 	mcpTools,
+	structuredOutput,
 }: SendChatParams_Internal) => {
 
 	if (providerName !== 'gemini') throw new Error(`Sending Gemini chat, but provider was ${providerName}`)
@@ -784,6 +857,10 @@ const sendGeminiChat = async ({
 			systemInstruction: separateSystemMessage,
 			thinkingConfig: thinkingConfig,
 			tools: toolConfig,
+			...(structuredOutput ? {
+				responseMimeType: 'application/json',
+				responseSchema: toGoogleSchema(structuredOutput.schema),
+			} : {}),
 		},
 		contents: messages as GeminiLLMChatMessage[],
 	})

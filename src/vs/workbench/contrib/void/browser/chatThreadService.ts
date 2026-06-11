@@ -39,120 +39,14 @@ import { IDirectoryStrService } from '../common/directoryStrService.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IMCPService } from '../common/mcpService.js';
 import { RawMCPToolCall } from '../common/mcpServiceTypes.js';
+import { LearningActivity, LearningActivityResponse, LearningAnswerValidationResult } from '../common/chatQuizTypes.js';
+import { IChatQuizService, fallbackLearningActivity } from './chatQuizService.js';
+import { agentCompletionSystemMessage, educationGuardrailSystemMessage, EducationResponseStyle, IChatResponseGuardrailService, likelyNeedsEducationalRewrite, sanitizeEducationalResponse } from './chatResponseGuardrailService.js';
 
 
 // related to retrying when LLM message has error
 const CHAT_RETRIES = 3
 const RETRY_DELAY = 2500
-
-type EducationResponseStyle = 'concept_explain' | 'guided_design' | 'pseudocode_only' | 'refuse_exact_solution'
-
-export const extractEducationResponseStyleJSON = (fullText: string): EducationResponseStyle => {
-	const trimmed = fullText.trim()
-	const withoutFence = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
-	const jsonMatch = withoutFence.match(/\{[\s\S]*\}/)
-	const jsonStr = jsonMatch ? jsonMatch[0] : withoutFence
-	try {
-		const parsed = JSON.parse(jsonStr) as { style?: unknown }
-		if (parsed.style === 'concept_explain') return 'concept_explain'
-		if (parsed.style === 'guided_design') return 'guided_design'
-		if (parsed.style === 'pseudocode_only') return 'pseudocode_only'
-		if (parsed.style === 'refuse_exact_solution') return 'refuse_exact_solution'
-		return 'guided_design'
-	}
-	catch {
-		if (withoutFence.includes('concept_explain')) return 'concept_explain'
-		if (withoutFence.includes('pseudocode_only')) return 'pseudocode_only'
-		if (withoutFence.includes('refuse_exact_solution')) return 'refuse_exact_solution'
-		return 'guided_design'
-	}
-}
-
-export const educationGuardrailSystemMessage = (style: EducationResponseStyle): string => {
-	if (style === 'concept_explain') {
-		return [
-			'Education response mode: concept explain.',
-			'Give a direct, helpful conceptual answer with examples when appropriate.',
-			'You may include small illustrative examples, including code, as long as they are general-purpose, brief, and not tailored to the user\'s exact codebase.',
-			'Do not provide a full copy-paste-ready implementation.'
-		].join('\n')
-	}
-	if (style === 'guided_design') {
-		return [
-			'Education response mode: guided design.',
-			'Explain the approach, moving parts, and tradeoffs without giving a copy-paste-ready implementation.',
-			'Do not provide fenced code blocks, imports, full function bodies, or exact project-specific code.',
-			'Use bullets, short explanations, and implementation steps instead of runnable code.',
-			'Small inline identifiers or tiny snippets are acceptable only if they are generic and not enough to paste directly into a project.'
-		].join('\n')
-	}
-	if (style === 'pseudocode_only') {
-		return [
-			'Education response mode: pseudocode only.',
-			'Do not provide runnable code, fenced code blocks, imports, exact JSX, exact CSS, exact TypeScript, or project-specific implementation.',
-			'You may provide high-level pseudocode or placeholder structure only.',
-			'Any pseudo block must stay abstract and not be copy-paste-ready.'
-		].join('\n')
-	}
-	return [
-		'Education response mode: refuse exact solution.',
-		'The user appears to be asking for a direct implementation they could copy into their project.',
-		'Do not provide copy-paste-ready code, exact patches, exact replacement text, or precise line-by-line implementation.',
-		'Instead, briefly explain the concept, give a hint, and offer a checklist of what to think through next.',
-		'Do not use fenced code blocks.'
-	].join('\n')
-}
-
-export const sanitizeEducationalResponse = (style: EducationResponseStyle, fullText: string): string => {
-	if (style === 'concept_explain') return fullText
-
-	const strippedCodeBlocks = fullText.replace(/```[\s\S]*?```/g, style === 'guided_design'
-		? 'Code example omitted so you can work through the implementation yourself.'
-		: 'Pseudocode omitted to keep this from turning into a copy-paste solution.')
-
-	const strippedIntegrationDirections = strippedCodeBlocks
-		.replace(/create a new file at[^\n]*/gi, 'Think about where a component like this would live in your project structure.')
-		.replace(/paste (in|this|something like this)[^\n]*/gi, 'Try sketching the structure yourself before writing the code.')
-		.replace(/replace that component entirely[^\n]*/gi, 'Decide whether you want to adapt the existing component or create a new one.')
-		.replace(/drop anywhere in your [^\n]*/gi, 'Use the concept in the place that makes the most sense in your UI.')
-
-	if (style === 'guided_design') return strippedIntegrationDirections
-
-	if (style === 'pseudocode_only') {
-		return strippedIntegrationDirections
-			.replace(/^\s*(import|export|const|let|var|function|class)\b.*$/gm, '')
-			.trim()
-	}
-
-	return strippedIntegrationDirections
-		.replace(/^\s*(import|export|const|let|var|function|class)\b.*$/gm, '')
-		.trim()
-}
-
-export const agentCompletionSystemMessage = [
-	'Post-implementation response mode.',
-	'A tool has just completed successfully. Continue using tools if more work is required.',
-	'If the requested work is complete, respond with a concise completion update in past tense.',
-	'Start with a clear completion phrase such as "Done." or "Implemented."',
-	'Summarize what changed and mention verification when known.',
-	'Do not provide pseudocode, future-tense implementation instructions, or describe how the user could implement work that has already been applied.'
-].join('\n')
-
-const likelyNeedsEducationalRewrite = (style: EducationResponseStyle, fullText: string): boolean => {
-	if (style === 'concept_explain') return false
-	const lowered = fullText.toLowerCase()
-	if (lowered.includes('here’s a complete') || lowered.includes("here's a complete")) return true
-	if (lowered.includes('self-contained')) return true
-	if (lowered.includes('create (or update)')) return true
-	if (lowered.includes('import and use it')) return true
-	if (lowered.includes('drop into your')) return true
-	if (/```[\s\S]*?```/.test(fullText)) return true
-	if (/create a new file at/i.test(fullText)) return true
-	if (/paste (in|this|something like this)/i.test(fullText)) return true
-	if (style === 'pseudocode_only' && /(tsx|jsx|css|typescript|react app|tailwind app)/i.test(fullText)) return true
-	return false
-}
-
 
 const findStagingSelectionIndex = (currentSelections: StagingSelectionItem[] | undefined, newSelection: StagingSelectionItem): number | null => {
 	if (!currentSelections) return null
@@ -254,231 +148,6 @@ export type ThreadType = {
 type ChatThreads = {
 	[id: string]: undefined | ThreadType;
 }
-
-export type LearningAnswerValidationResult =
-	| { correct: true; feedback: string }
-	| { correct: false; feedback: string }
-
-export type LearningActivity =
-	| {
-		version: 1;
-		kind: 'multiple_choice';
-		prompt: string;
-		context?: { title?: string; language?: string; code: string };
-		options: { id: string; label: string; format: 'text' | 'code' }[];
-		correctOptionId: string;
-		explanation: string;
-	}
-	| {
-		version: 1;
-		kind: 'short_answer';
-		prompt: string;
-		context?: { title?: string; language?: string; code: string };
-		expectedAnswer: string;
-	}
-
-export type LearningActivityResponse =
-	| { kind: 'multiple_choice'; optionId: string }
-	| { kind: 'short_answer'; answer: string }
-
-const fallbackLearningActivity = (toolMessage?: ToolMessage<ToolName> & { type: 'tool_request' }): LearningActivity => {
-	if (toolMessage?.name === 'rewrite_file') {
-		const params = toolMessage.params as BuiltinToolCallParams['rewrite_file']
-		return {
-			version: 1,
-			kind: 'short_answer',
-			prompt: 'Looking at this file content, describe one implementation detail you recognize or would verify before replacing the file.',
-			context: {
-				title: params.uri.path.split('/').pop() || 'File content',
-				code: truncate(params.newContent, 1800)
-			},
-			expectedAnswer: 'Accept any reasonable observation about the shown code, including its component structure, data flow, event handling, styling, imports, accessibility, or behavior.'
-		}
-	}
-	if (toolMessage?.name === 'edit_file') {
-		const params = toolMessage.params as BuiltinToolCallParams['edit_file']
-		return {
-			version: 1,
-			kind: 'short_answer',
-			prompt: 'Looking at this edit block, describe what code pattern or implementation step it appears to involve.',
-			context: {
-				title: params.uri.path.split('/').pop() || 'Edit block',
-				code: truncate(params.searchReplaceBlocks, 1800)
-			},
-			expectedAnswer: 'Accept any plausible description grounded in the shown edit block, even if it is brief, incomplete, or uses informal terminology.'
-		}
-	}
-	return {
-		version: 1,
-		kind: 'short_answer',
-		prompt: `What code-level consideration would you check before running ${toolMessage?.name || 'this implementation step'}?`,
-		expectedAnswer: 'Accept any plausible and relevant implementation consideration. The learner does not need to identify one exact answer.'
-	}
-}
-
-export const tryExtractLearningActivityJSON = (fullText: string): LearningActivity | null => {
-	const trimmed = fullText.trim()
-	const withoutFence = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
-	const jsonMatch = withoutFence.match(/\{[\s\S]*\}/)
-	const jsonStr = jsonMatch ? jsonMatch[0] : withoutFence
-
-	try {
-		const parsed = JSON.parse(jsonStr) as {
-			kind?: unknown;
-			prompt?: unknown;
-			question?: unknown;
-			context?: unknown;
-			options?: unknown;
-			correctOptionId?: unknown;
-			explanation?: unknown;
-			expectedAnswer?: unknown;
-		}
-		const prompt = typeof parsed.prompt === 'string' && parsed.prompt.trim()
-			? parsed.prompt.trim()
-			: typeof parsed.question === 'string' && parsed.question.trim()
-				? parsed.question.trim()
-				: null
-		const rawContext = parsed.context && typeof parsed.context === 'object'
-			? parsed.context as { title?: unknown; language?: unknown; code?: unknown }
-			: null
-		const context = rawContext && typeof rawContext.code === 'string' && rawContext.code.trim()
-			? {
-				code: rawContext.code.trim(),
-				...(typeof rawContext.title === 'string' && rawContext.title.trim() ? { title: rawContext.title.trim() } : {}),
-				...(typeof rawContext.language === 'string' && rawContext.language.trim() ? { language: rawContext.language.trim() } : {}),
-			}
-			: undefined
-
-		if (parsed.kind === 'multiple_choice' && prompt && Array.isArray(parsed.options)) {
-			const options = parsed.options.flatMap((option) => {
-				if (!option || typeof option !== 'object') return []
-				const { id, label, format } = option as { id?: unknown; label?: unknown; format?: unknown }
-				if (typeof id !== 'string' || !id.trim() || typeof label !== 'string' || !label.trim()) return []
-				return [{ id: id.trim(), label: label.trim(), format: format === 'code' ? 'code' as const : 'text' as const }]
-			})
-			const optionIds = new Set(options.map(option => option.id))
-			const normalizedLabels = options.map(option => option.label.trim().toLowerCase())
-			const optionLabels = new Set(normalizedLabels)
-			const hasPlaceholderLabel = normalizedLabels.some(label => /^(code|text|option|answer|snippet|choice)(\s+[a-d1-4])?[.!:]?$/i.test(label))
-			const correctOptionId = typeof parsed.correctOptionId === 'string' ? parsed.correctOptionId.trim() : ''
-			if (
-				(options.length === 3 || options.length === 4)
-				&& optionIds.size === options.length
-				&& optionLabels.size === options.length
-				&& !hasPlaceholderLabel
-				&& optionIds.has(correctOptionId)
-			) {
-				return {
-					version: 1,
-					kind: 'multiple_choice',
-					prompt,
-					...(context ? { context } : {}),
-					options,
-					correctOptionId,
-					explanation: typeof parsed.explanation === 'string' && parsed.explanation.trim()
-						? parsed.explanation.trim()
-						: 'That choice best matches the intended behavior from the request.'
-				}
-			}
-		}
-
-		if (prompt && typeof parsed.expectedAnswer === 'string' && parsed.expectedAnswer.trim()) {
-			return {
-				version: 1,
-				kind: 'short_answer',
-				prompt,
-				...(context ? { context } : {}),
-				expectedAnswer: parsed.expectedAnswer.trim()
-			}
-		}
-	}
-	catch {
-		return null
-	}
-
-	return null
-}
-
-export const extractLearningActivityJSON = (fullText: string, fallback = fallbackLearningActivity()): LearningActivity => {
-	return tryExtractLearningActivityJSON(fullText) ?? fallback
-}
-
-export const isSubstantiveLearningAnswer = (answer: string): boolean => {
-	const normalized = answer.trim().toLowerCase()
-	if (normalized.length < 6) return false
-	if (/^(idk|i don't know|dont know|no idea|skip|whatever|nothing|n\/a)[.!]?$/i.test(normalized)) return false
-	return /[a-z]{3}/i.test(normalized)
-}
-
-export const validateMultipleChoiceActivity = (
-	activity: LearningActivity & { kind: 'multiple_choice' },
-	optionId: string
-): LearningAnswerValidationResult => {
-	if (optionId === activity.correctOptionId) {
-		return { correct: true, feedback: activity.explanation }
-	}
-	return {
-		correct: false,
-		feedback: 'Not quite. Revisit which code pattern correctly implements this step.'
-	}
-}
-
-export const shuffleMultipleChoiceActivity = (
-	activity: LearningActivity & { kind: 'multiple_choice' },
-	seed: string
-): LearningActivity & { kind: 'multiple_choice' } => {
-	let state = 2166136261
-	for (let i = 0; i < seed.length; i += 1) {
-		state ^= seed.charCodeAt(i)
-		state = Math.imul(state, 16777619)
-	}
-
-	const options = [...activity.options]
-	for (let i = options.length - 1; i > 0; i -= 1) {
-		state ^= state << 13
-		state ^= state >>> 17
-		state ^= state << 5
-		const swapIdx = (state >>> 0) % (i + 1)
-		;[options[i], options[swapIdx]] = [options[swapIdx], options[i]]
-	}
-
-	return { ...activity, options }
-}
-
-export const learningActivitySystemMessage = [
-	'You are generating a learning activity for a student before a code edit is applied.',
-	'Create a self-contained question about HOW to implement the requested feature in code.',
-	'The student cannot see the pending code edit, but you may and should show the relevant code inside the activity itself.',
-	'Use hidden implementation details to construct visible, answerable snippets. Never refer to code that you do not include in the prompt, context, or options.',
-	'Strong activity types include:',
-	'- choose which code snippet should be written;',
-	'- identify what a shown line or small block does;',
-	'- choose the correct component structure, state update, event handler, data flow, API usage, or accessibility pattern;',
-	'- predict the effect of a shown snippet;',
-	'- fill in or describe a small missing implementation step.',
-	'Avoid generic requirements questions such as what the user should see, what feature they requested, or what outcome they want. The user already supplied that information.',
-	'Avoid asking why an unseen proposed edit was made or what unseen code does.',
-	'Prefer multiple choice with concrete code snippets. Use short answer only when it produces a better code-level learning check.',
-	'Return one JSON object only. Do not use Markdown fences, commentary, schema annotations, or placeholder values.',
-	'For multiple choice, return only JSON in this exact shape: {"kind":"multiple_choice","prompt":string,"context":{"title":string,"language":string,"code":string},"options":[{"id":string,"label":string,"format":"text"|"code"}],"correctOptionId":string,"explanation":string}.',
-	'context is optional, but include it when the learner needs surrounding code to answer. Keep it focused, usually 3-12 lines.',
-	'The option label must contain the actual answer text or code snippet. Never use placeholder labels such as "code", "text", "snippet", or "option".',
-	'Use option format "code" when the label itself is an actual code snippet. Code options may contain newlines.',
-	'Provide exactly 3 or 4 concise options with unique ids. Include one clearly best answer and plausible code-level distractors.',
-	'For short answer, return only JSON in this exact shape: {"kind":"short_answer","prompt":string,"context":{"title":string,"language":string,"code":string},"expectedAnswer":string}.',
-	'prompt: one concise, specific implementation question that can be answered using the code shown in the activity.',
-	'expectedAnswer: short rubric answer (1-3 sentences) that would count as correct.',
-	'Valid multiple-choice example:',
-	'{"kind":"multiple_choice","prompt":"Which JSX should replace the missing return value?","context":{"title":"Navbar.tsx","language":"tsx","code":"const Navbar = () => {\\n  return (\\n    // What goes here?\\n  );\\n};"},"options":[{"id":"nav","label":"<nav aria-label=\\"Main navigation\\"><a href=\\"/\\">Home</a></nav>","format":"code"},{"id":"call","label":"Navbar()","format":"code"},{"id":"ctor","label":"new Navbar()","format":"code"}],"correctOptionId":"nav","explanation":"A React component should return JSX, and nav gives the links appropriate semantics."}',
-	'Valid short-answer example:',
-	'{"kind":"short_answer","prompt":"What state would you add to control whether the mobile menu is visible?","context":{"title":"Navbar.tsx","language":"tsx","code":"const Navbar = () => {\\n  // Add menu state here\\n};"},"expectedAnswer":"A boolean state value such as isMenuOpen, with a setter used by the menu button."}',
-	'Invalid output examples: labels that only say "code"; duplicate option labels; fewer than 3 options; a correctOptionId not present in options; prose outside the JSON object.',
-	'Before responding, verify that every option label contains the actual answer, all option ids and labels are unique, and correctOptionId matches exactly one option.',
-	'Write the activity in natural language for the student.',
-	'Do not mention tool calls, function-call machinery, AI behavior, raw params, or internal implementation metadata.',
-	'The correct answer must be inferable from the user request plus the code and context included in the activity itself.'
-].join('\n')
-
 
 export type ThreadsState = {
 	allThreads: ChatThreads;
@@ -640,7 +309,6 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 	readonly streamState: ThreadStreamState = {}
 	state: ThreadsState // allThreads is persisted, currentThread is not
-	private readonly _learningActivityByToolId: { [toolId: string]: LearningActivity | undefined } = {}
 
 	// used in checkpointing
 	// private readonly _userModifiedFilesToCheckInCheckpoints = new LRUCache<string, null>(50)
@@ -662,6 +330,8 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		@IDirectoryStrService private readonly _directoryStringService: IDirectoryStrService,
 		@IFileService private readonly _fileService: IFileService,
 		@IMCPService private readonly _mcpService: IMCPService,
+		@IChatQuizService private readonly _chatQuizService: IChatQuizService,
+		@IChatResponseGuardrailService private readonly _chatResponseGuardrailService: IChatResponseGuardrailService,
 	) {
 		super()
 		this.state = { allThreads: {}, currentThreadId: null as unknown as string } // default state
@@ -889,181 +559,33 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		)
 	}
 
-	private _extractLearningValidationJSON(fullText: string, learnerAnswer: string): LearningAnswerValidationResult {
-		const trimmed = fullText.trim()
-		const withoutFence = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
-		const jsonMatch = withoutFence.match(/\{[\s\S]*\}/)
-		const jsonStr = jsonMatch ? jsonMatch[0] : withoutFence
-
-		try {
-			const parsed = JSON.parse(jsonStr) as { correct?: unknown; feedback?: unknown }
-			if (parsed.correct !== true && parsed.correct !== false) {
-				return isSubstantiveLearningAnswer(learnerAnswer)
-					? { correct: true, feedback: 'That is a reasonable implementation explanation.' }
-					: { correct: false, feedback: 'Add a little more about the code or implementation pattern.' }
-			}
-			return {
-				correct: parsed.correct,
-				feedback: typeof parsed.feedback === 'string' && parsed.feedback.trim()
-					? parsed.feedback.trim()
-					: parsed.correct === true
-						? 'Looks good.'
-						: 'Add a little more about the relevant code or implementation pattern.'
-			}
-		}
-		catch {
-			return isSubstantiveLearningAnswer(learnerAnswer)
-				? { correct: true, feedback: 'That is a reasonable implementation explanation.' }
-				: { correct: false, feedback: 'Add a little more about the code or implementation pattern.' }
-		}
-	}
-
 	private _classifyEducationResponseStyle({ threadId, chatMode, modelSelection }: { threadId: string, chatMode: ChatMode, modelSelection: ModelSelection | null }): Promise<EducationResponseStyle | null> {
-		if (modelSelection === null) return Promise.resolve(null)
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return Promise.resolve(null)
-		const latestUserMessage = findLast(thread.messages, (message) => message.role === 'user') as UserMessageType | undefined
+		const latestUserMessage = findLast(thread.messages, message => message.role === 'user') as UserMessageType | undefined
 		if (!latestUserMessage) return Promise.resolve(null)
-
-		const systemMessage = [
-			'Classify the learner request for an educational coding assistant.',
-			'Return only JSON in this exact shape: {"style": "concept_explain" | "guided_design" | "pseudocode_only" | "refuse_exact_solution"}.',
-			'Use "concept_explain" for concepts, syntax, definitions, comparisons, and short general examples.',
-			'Use "guided_design" when the user wants to build something and should get structure, steps, and tradeoffs but not runnable code.',
-			'Use "pseudocode_only" when the request would otherwise invite a nearly copy-pasteable generic implementation, even if it is not tied to a specific codebase.',
-			'Use "refuse_exact_solution" when the user is asking for exact implementation details, exact code to write in their project, or a direct solution they could paste in.',
-			'If the request is ambiguous but asks how to implement or build something, prefer "guided_design" or "pseudocode_only" rather than "concept_explain".',
-			'If there is codebase context, selections, or prior thread context suggesting the user wants a direct solution, prefer "refuse_exact_solution".',
-			'In agent mode, classify the user-visible explanation the assistant should give. Tool execution approval is handled separately, so focus only on how much solution detail should appear in the visible chat response.',
-			'In agent mode, if the user is asking the assistant to build, implement, add, or wire something up, prefer "pseudocode_only" or "refuse_exact_solution" unless the request is clearly conceptual.'
-		].join('\n')
-
-		const priorContext = thread.messages
+		const recentContext = thread.messages
 			.filter(message => message.role === 'user' || message.role === 'assistant')
 			.slice(-6, -1)
-			.map(message => {
-				if (message.role === 'assistant') return `assistant: ${truncate(message.displayContent || message.reasoning || '', 800)}`
-				return `user: ${truncate(message.content || message.displayContent || '', 800)}`
-			})
+			.map(message => message.role === 'assistant'
+				? `assistant: ${truncate(message.displayContent || message.reasoning || '', 800)}`
+				: `user: ${truncate(message.content || message.displayContent || '', 800)}`)
 			.join('\n\n')
-
-		const prompt = [
-			'Chat mode:',
-			chatMode,
-			'',
-			'Recent conversation context:',
-			priorContext || '(No earlier context.)',
-			'',
-			'Latest user-visible request:',
-			latestUserMessage.displayContent || '(empty)',
-			'',
-			'Latest user request with attached context summary:',
-			latestUserMessage.content || latestUserMessage.displayContent || '(empty)',
-			'',
-			'Number of attached selections:',
-			String(latestUserMessage.selections?.length ?? 0),
-		].join('\n')
-
-		const simpleMessages = [{ role: 'user' as const, content: prompt }]
-		return new Promise((resolve) => {
-			const { messages, separateSystemMessage } = this._convertToLLMMessagesService.prepareLLMSimpleMessages({
-				simpleMessages,
-				systemMessage,
-				modelSelection,
-				featureName: 'Chat',
-			})
-			const { modelSelectionOptions } = this._currentModelSelectionProps()
-			const requestId = this._llmMessageService.sendLLMMessage({
-				messagesType: 'chatMessages',
-				messages,
-				separateSystemMessage,
-				chatMode: null,
-				modelSelection,
-				modelSelectionOptions,
-				overridesOfModel: this._settingsService.state.overridesOfModel,
-				onText: () => { },
-				onFinalMessage: ({ fullText }) => {
-					const style = extractEducationResponseStyleJSON(fullText)
-					console.log('Education response style classified', {
-						threadId,
-						chatMode,
-						style,
-						classifierRawResponse: fullText,
-					})
-					resolve(style)
-				},
-				onError: () => resolve('pseudocode_only'),
-				onAbort: () => resolve('pseudocode_only'),
-				logging: { loggingName: 'Chat - Classify Education Response Style', loggingExtras: { threadId, chatMode } },
-			})
-			if (!requestId) resolve('pseudocode_only')
+		return this._chatResponseGuardrailService.classifyResponseStyle({
+			threadId, chatMode, modelSelection, recentContext,
+			userDisplayContent: latestUserMessage.displayContent,
+			userContent: latestUserMessage.content,
+			selectionCount: latestUserMessage.selections?.length ?? 0,
 		})
 	}
 
-	private _rewriteEducationalAgentResponse({
-		threadId,
-		modelSelection,
-		style,
-		originalResponse,
-	}: {
-		threadId: string,
-		modelSelection: ModelSelection | null,
-		style: EducationResponseStyle,
-		originalResponse: string,
-	}): Promise<string> {
-		if (modelSelection === null) return Promise.resolve(sanitizeEducationalResponse(style, originalResponse))
+	private _rewriteEducationalAgentResponse({ threadId, modelSelection, style, originalResponse }: { threadId: string, modelSelection: ModelSelection | null, style: EducationResponseStyle, originalResponse: string }): Promise<string> {
 		const thread = this.state.allThreads[threadId]
-		const latestUserMessage = thread ? findLast(thread.messages, (message) => message.role === 'user') as UserMessageType | undefined : undefined
-
-		const systemMessage = [
-			'Rewrite the assistant response for an educational coding product.',
-			'Your goal is to preserve usefulness while removing copy-paste-ready implementation guidance.',
-			'Do not provide file paths, fenced code blocks, imports, exact JSX, exact CSS, exact TypeScript, exact prop signatures, or step-by-step integration instructions.',
-			'Do not say that content was omitted or removed.',
-			'Do not mention internal tools, tool calls, sanitization, policies, or that you are rewriting anything.',
-			'Return only the rewritten assistant response as plain text.',
-			style === 'guided_design'
-				? 'Use this structure: short overview, 3-5 bullet points about moving parts or decisions, then 1 short paragraph about what to think through next.'
-				: style === 'pseudocode_only'
-					? 'Use this structure: 1 short conceptual paragraph, then 3-5 abstract bullet points, then at most 3 lines of clearly non-runnable pseudocode if it genuinely helps.'
-					: 'Use this structure: brief concept explanation, one hint, and a short checklist of what the learner should inspect or decide next.'
-		].join('\n')
-
-		const prompt = [
-			'Latest user request:',
-			latestUserMessage?.content || latestUserMessage?.displayContent || '(empty)',
-			'',
-			'Current educational mode:',
-			style,
-			'',
-			'Assistant draft to rewrite:',
+		const latestUserMessage = thread ? findLast(thread.messages, message => message.role === 'user') as UserMessageType | undefined : undefined
+		return this._chatResponseGuardrailService.rewriteAgentResponse({
+			threadId, modelSelection, style,
+			userRequest: latestUserMessage?.content || latestUserMessage?.displayContent || '',
 			originalResponse,
-		].join('\n')
-
-		const simpleMessages = [{ role: 'user' as const, content: prompt }]
-		return new Promise((resolve) => {
-			const { messages, separateSystemMessage } = this._convertToLLMMessagesService.prepareLLMSimpleMessages({
-				simpleMessages,
-				systemMessage,
-				modelSelection,
-				featureName: 'Chat',
-			})
-			const { modelSelectionOptions } = this._currentModelSelectionProps()
-			const requestId = this._llmMessageService.sendLLMMessage({
-				messagesType: 'chatMessages',
-				messages,
-				separateSystemMessage,
-				chatMode: null,
-				modelSelection,
-				modelSelectionOptions,
-				overridesOfModel: this._settingsService.state.overridesOfModel,
-				onText: () => { },
-				onFinalMessage: ({ fullText }) => resolve(fullText.trim() || sanitizeEducationalResponse(style, originalResponse)),
-				onError: () => resolve(sanitizeEducationalResponse(style, originalResponse)),
-				onAbort: () => resolve(sanitizeEducationalResponse(style, originalResponse)),
-				logging: { loggingName: 'Chat - Rewrite Educational Agent Response', loggingExtras: { threadId, style } },
-			})
-			if (!requestId) resolve(sanitizeEducationalResponse(style, originalResponse))
 		})
 	}
 
@@ -1080,220 +602,29 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		const pending = toolId ? this._getPendingToolRequestById(threadId, toolId) : this._getLatestPendingToolRequest(threadId)
 		if (!pending) return Promise.resolve(fallbackLearningActivity())
 		const { toolMessage, toolMessageIdx } = pending
-		const fallback = fallbackLearningActivity(toolMessage)
-		const cached = this._learningActivityByToolId[toolMessage.id]
-		if (cached) return Promise.resolve(cached)
-
 		const thread = this.state.allThreads[threadId]
-		if (!thread) return Promise.resolve(fallback)
+		if (!thread) return Promise.resolve(fallbackLearningActivity(toolMessage))
 		const userMessage = findLast(thread.messages.slice(0, toolMessageIdx), message => message.role === 'user') as UserMessageType | undefined
 		const assistantMessage = findLast(thread.messages.slice(0, toolMessageIdx), message => message.role === 'assistant')
-		const aiResult = assistantMessage?.role === 'assistant' ? assistantMessage.displayContent : ''
-		const toolDetails = JSON.stringify({
-			name: toolMessage.name,
-			params: toolMessage.params,
-			rawParams: toolMessage.rawParams,
-			mcpServerName: toolMessage.mcpServerName,
-		}, null, 2)
-
-		const prompt = [
-			'Original user request:',
-			userMessage?.displayContent || userMessage?.content || '(No user request was available.)',
-			'',
-			'Visible assistant summary:',
-			aiResult || '(No assistant explanation was available.)',
-			'',
-			'Pending implementation details to turn into a visible, self-contained code question:',
-			toolDetails,
-			'',
-			'Generate one code-level learning activity about how to implement this step.',
-			'Expose any code needed to answer inside the activity context or options. Do not ask a generic product-requirements question.'
-		].join('\n')
-
-		return new Promise((resolve) => {
-			const { modelSelection, modelSelectionOptions } = this._currentModelSelectionProps()
-			let settled = false
-			const finish = (activity: LearningActivity) => {
-				if (settled) return
-				settled = true
-				this._learningActivityByToolId[toolMessage.id] = activity
-				resolve(activity)
-			}
-			const sendGenerationAttempt = (attempt: number, rejectedOutput?: string) => {
-				if (settled) return
-				let attemptHandled = false
-				const retryOrFinish = (failureOutput: string) => {
-					if (attemptHandled || settled) return
-					attemptHandled = true
-					if (attempt === 0) sendGenerationAttempt(1, failureOutput)
-					else finish(fallback)
-				}
-				const attemptPrompt = rejectedOutput
-					? [
-						prompt,
-						'',
-						'Your previous output failed the required activity contract:',
-						truncate(rejectedOutput, 3000),
-						'',
-						'Correct it now. Return a fresh JSON object only. Use a short-answer activity if you cannot produce three meaningful, distinct multiple-choice options.'
-					].join('\n')
-					: prompt
-				const { messages, separateSystemMessage } = this._convertToLLMMessagesService.prepareLLMSimpleMessages({
-					simpleMessages: [{ role: 'user' as const, content: attemptPrompt }],
-					systemMessage: learningActivitySystemMessage,
-					modelSelection,
-					featureName: 'Chat',
-				})
-				const requestId = this._llmMessageService.sendLLMMessage({
-					messagesType: 'chatMessages',
-					messages,
-					separateSystemMessage,
-					chatMode: null,
-					modelSelection,
-					modelSelectionOptions,
-					overridesOfModel: this._settingsService.state.overridesOfModel,
-					onText: () => { },
-					onFinalMessage: ({ fullText }) => {
-						if (attemptHandled || settled) return
-						const parsedActivity = tryExtractLearningActivityJSON(fullText)
-						if (!parsedActivity) {
-							retryOrFinish(fullText)
-							return
-						}
-						attemptHandled = true
-						finish(parsedActivity.kind === 'multiple_choice'
-							? shuffleMultipleChoiceActivity(parsedActivity, toolMessage.id)
-							: parsedActivity)
-					},
-					onError: () => retryOrFinish('(The generation request failed before returning output.)'),
-					onAbort: () => {
-						attemptHandled = true
-						finish(fallback)
-					},
-					logging: {
-						loggingName: 'Chat - Generate Learning Activity',
-						loggingExtras: { threadId, toolName: toolMessage.name, attempt: attempt + 1 }
-					},
-				})
-				if (!requestId) {
-					retryOrFinish('(The generation request could not be started.)')
-				}
-			}
-			sendGenerationAttempt(0)
+		return this._chatQuizService.generateActivity({
+			threadId, toolMessage,
+			userRequest: userMessage?.displayContent || userMessage?.content || '',
+			assistantSummary: assistantMessage?.role === 'assistant' ? assistantMessage.displayContent : '',
 		})
 	}
 
 	validateLearningAnswerForLatestToolRequest({ threadId, toolId, response }: { threadId: string, toolId?: string, response: LearningActivityResponse }): Promise<LearningAnswerValidationResult> {
 		const pending = toolId ? this._getPendingToolRequestById(threadId, toolId) : this._getLatestPendingToolRequest(threadId)
-		if (!pending) {
-			return Promise.resolve({ correct: false, feedback: 'There is no pending implementation to approve.' })
-		}
+		if (!pending) return Promise.resolve({ correct: false, feedback: 'There is no pending implementation to approve.' })
 		const { toolMessage, toolMessageIdx } = pending
 		const thread = this.state.allThreads[threadId]
-		if (!thread) {
-			return Promise.resolve({ correct: false, feedback: 'This chat thread is no longer available.' })
-		}
-
+		if (!thread) return Promise.resolve({ correct: false, feedback: 'This chat thread is no longer available.' })
 		const userMessage = findLast(thread.messages.slice(0, toolMessageIdx), message => message.role === 'user') as UserMessageType | undefined
 		const assistantMessage = findLast(thread.messages.slice(0, toolMessageIdx), message => message.role === 'assistant')
-		const aiResult = assistantMessage?.role === 'assistant' ? assistantMessage.displayContent : ''
-		const toolDetails = JSON.stringify({
-			name: toolMessage.name,
-			params: toolMessage.params,
-			rawParams: toolMessage.rawParams,
-			mcpServerName: toolMessage.mcpServerName,
-		}, null, 2)
-
-		const activity = this._learningActivityByToolId[toolMessage.id] ?? fallbackLearningActivity(toolMessage)
-		if (activity.kind === 'multiple_choice') {
-			if (response.kind !== 'multiple_choice') {
-				return Promise.resolve({ correct: false, feedback: 'Choose one of the available answers.' })
-			}
-			return Promise.resolve(validateMultipleChoiceActivity(activity, response.optionId))
-		}
-		if (response.kind !== 'short_answer') {
-			return Promise.resolve({ correct: false, feedback: 'Describe the code-level implementation step in your own words.' })
-		}
-
-		const systemMessage = [
-			'You are checking whether a learner understands a code-level implementation concept before an edit is applied.',
-			'Grade very leniently and use discretion. This is a lightweight reflection check, not an exam.',
-			'Default to correct when the response is plausible, relevant, or demonstrates partial understanding.',
-			'Accept brief answers, informal wording, different terminology, incomplete explanations, and reasonable alternative implementation approaches.',
-			'The learner does not need to match the expected-answer wording or mention every detail.',
-			'Only mark incorrect when the response is meaningless filler, unrelated to the question, or clearly contradicts the shown code or implementation concept.',
-			'If uncertain, mark correct.',
-			'Return only JSON in this exact shape: {"correct": boolean, "feedback": string}.',
-			'The feedback should be one concise sentence.',
-			'If the learner is incorrect, give a hint rather than the answer.',
-			'Do not reveal the expected answer, exact replacement text, exact code, or the full explanation needed to pass.',
-			'Hints should point toward the relevant syntax, component structure, state flow, event handling, API usage, or code behavior.'
-		].join('\n')
-
-		const validationPrompt = [
-			'Original user request:',
-			userMessage?.displayContent || userMessage?.content || '(No user request was available.)',
-			'',
-			'Visible assistant summary:',
-			aiResult || '(No assistant explanation was available.)',
-			'',
-			'Hidden implementation details for consistency checking only:',
-			toolDetails,
-			'',
-			'Code-level learning question:',
-			activity.prompt,
-			'',
-			'Expected answer rubric:',
-			activity.expectedAnswer,
-			'',
-			'Learner response:',
-			response.answer,
-		].join('\n')
-
-		const simpleMessages = [{
-			role: 'user' as const,
-			content: validationPrompt
-		}]
-
-		return new Promise((resolve) => {
-			const { modelSelection, modelSelectionOptions } = this._currentModelSelectionProps()
-			const { messages, separateSystemMessage } = this._convertToLLMMessagesService.prepareLLMSimpleMessages({
-				simpleMessages,
-				systemMessage,
-				modelSelection,
-				featureName: 'Chat',
-			})
-			const requestId = this._llmMessageService.sendLLMMessage({
-				messagesType: 'chatMessages',
-				messages,
-				separateSystemMessage,
-				chatMode: null,
-				modelSelection,
-				modelSelectionOptions,
-				overridesOfModel: this._settingsService.state.overridesOfModel,
-				onText: () => { },
-				onFinalMessage: ({ fullText }) => {
-					resolve(this._extractLearningValidationJSON(fullText, response.answer))
-				},
-				onError: (error) => {
-					console.error('Error validating learning answer:', error)
-					resolve(isSubstantiveLearningAnswer(response.answer)
-						? { correct: true, feedback: 'That is a reasonable implementation explanation.' }
-						: { correct: false, feedback: 'Add a little more about the code or implementation pattern.' })
-				},
-				onAbort: () => {
-					resolve(isSubstantiveLearningAnswer(response.answer)
-						? { correct: true, feedback: 'That is a reasonable implementation explanation.' }
-						: { correct: false, feedback: 'Add a little more about the code or implementation pattern.' })
-				},
-				logging: { loggingName: 'Chat - Validate Learning Answer', loggingExtras: { threadId, toolName: toolMessage.name } },
-			})
-
-			if (!requestId) {
-				resolve(isSubstantiveLearningAnswer(response.answer)
-					? { correct: true, feedback: 'That is a reasonable implementation explanation.' }
-					: { correct: false, feedback: 'Add a little more about the code or implementation pattern.' })
-			}
+		return this._chatQuizService.validateAnswer({
+			threadId, toolMessage, response,
+			userRequest: userMessage?.displayContent || userMessage?.content || '',
+			assistantSummary: assistantMessage?.role === 'assistant' ? assistantMessage.displayContent : '',
 		})
 	}
 

@@ -4,7 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { agentCompletionSystemMessage, educationGuardrailSystemMessage, extractEducationResponseStyleJSON, extractLearningActivityJSON, isSubstantiveLearningAnswer, learningActivitySystemMessage, sanitizeEducationalResponse, shuffleMultipleChoiceActivity, tryExtractLearningActivityJSON, validateMultipleChoiceActivity } from '../../browser/chatThreadService.js';
+import { URI } from '../../../../../base/common/uri.js';
+import { extractLearningActivityJSON, isRepeatedQuizPrompt, isSubstantiveLearningAnswer, learningActivityStructuredOutput, learningActivitySystemMessage, quizToolFocus, shuffleMultipleChoiceActivity, tryExtractLearningActivityJSON, validateMultipleChoiceActivity } from '../../browser/chatQuizService.js';
+import { agentCompletionSystemMessage, educationGuardrailSystemMessage, extractEducationResponseStyleJSON, sanitizeEducationalResponse } from '../../browser/chatResponseGuardrailService.js';
 import { combineChatSystemMessage } from '../../browser/convertToLLMMessageService.js';
 
 suite('Void - Education Guardrails', () => {
@@ -162,6 +164,49 @@ suite('Void - Education Guardrails', () => {
 		assert.ok(learningActivitySystemMessage.includes('Never use placeholder labels'));
 		assert.ok(learningActivitySystemMessage.includes('Valid multiple-choice example'));
 		assert.ok(learningActivitySystemMessage.includes('Invalid output examples'));
+		assert.ok(learningActivitySystemMessage.includes('CURRENT TOOL STEP'));
+		assert.ok(learningActivitySystemMessage.includes('imports and renders Navbar in App.tsx'));
+	});
+
+	test('quiz tool focus separates the before and after code for an edit', () => {
+		const focus = quizToolFocus({
+			role: 'tool',
+			type: 'tool_request',
+			id: 'tool-1',
+			name: 'edit_file',
+			params: {
+				uri: URI.file('/workspace/src/App.tsx'),
+				searchReplaceBlocks: '<<<<<<< ORIGINAL\nimport React from \"react\";\n=======\nimport React from \"react\";\nimport Navbar from \"./Navbar\";\n>>>>>>> UPDATED'
+			},
+			content: '',
+			result: null,
+			rawParams: {},
+			mcpServerName: undefined,
+		});
+
+		assert.strictEqual(focus.fileName, 'App.tsx');
+		assert.ok(focus.details.includes('code being replaced'));
+		assert.ok(focus.details.includes('import Navbar'));
+	});
+
+	test('repeated quiz prompts detect exact and lightly rephrased questions', () => {
+		const prior = ['Which JSX correctly renders the Navbar component inside App?'];
+		assert.strictEqual(isRepeatedQuizPrompt('Which JSX correctly renders the Navbar component inside App?', prior), true);
+		assert.strictEqual(isRepeatedQuizPrompt('What state controls whether the mobile menu is open?', prior), false);
+	});
+
+	test('learning activity structured output requires the complete response envelope', () => {
+		assert.strictEqual(learningActivityStructuredOutput.name, 'learning_activity');
+		assert.strictEqual(learningActivityStructuredOutput.strict, true);
+		assert.deepStrictEqual(learningActivityStructuredOutput.schema.required, [
+			'kind',
+			'prompt',
+			'context',
+			'options',
+			'correctOptionId',
+			'explanation',
+			'expectedAnswer'
+		]);
 	});
 
 	test('agent completion prompt distinguishes completed work from implementation guidance', () => {
